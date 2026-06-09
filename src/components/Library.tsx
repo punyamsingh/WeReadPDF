@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { Flame, Lock, BookOpen, Type, Pencil, Trash2, Check, X } from "lucide-react";
+import { Lock, BookOpen, Type, Pencil, Trash2, Check, X } from "lucide-react";
 import { loadProgress, type CachedDoc } from "@/lib/reader-store";
 import { DropZone } from "./DropZone";
+import { Mockingjay } from "./Mockingjay";
 
 interface Props {
   docs: CachedDoc[];
@@ -70,12 +71,12 @@ export function Library({
 
       {/* Nav */}
       <nav className="px-6 sm:px-10 py-6 flex items-center justify-between max-w-7xl mx-auto">
-        <div className="flex items-center gap-2">
-          <Flame className="w-5 h-5 text-ember animate-flicker" />
+        <div className="flex items-center gap-2.5">
+          <Mockingjay className="w-7 h-7 pin-glow" />
           <span className="font-display tracking-[0.3em] text-sm uppercase">WeReadPDF</span>
         </div>
         <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          <Lock className="w-3 h-3" /> Local-only
+          <Lock className="w-3 h-3" /> District-local
         </span>
       </nav>
 
@@ -103,8 +104,8 @@ export function Library({
       )}
 
       <footer className="px-6 sm:px-10 py-10 border-t border-border/40 text-center text-xs text-muted-foreground tracking-wider">
-        <span className="font-display uppercase tracking-[0.3em]">WeReadPDF</span> — kindled
-        locally, in your browser.
+        <span className="font-display uppercase tracking-[0.3em]">WeReadPDF</span> — read in your
+        own district. May the odds be ever in your favor.
       </footer>
     </div>
   );
@@ -139,9 +140,9 @@ function Shelf({
 }) {
   return (
     <section className="px-6 sm:px-10 pb-20 max-w-6xl mx-auto">
-      <p className="text-xs uppercase tracking-[0.4em] text-ember mb-2">— Your shelf —</p>
+      <p className="text-xs uppercase tracking-[0.4em] text-ember mb-2">— Your tributes —</p>
       <h1 className="font-display font-black tracking-tight text-3xl sm:text-5xl mb-10">
-        The library
+        The Archive of Panem
       </h1>
 
       {continueItem && (
@@ -180,17 +181,17 @@ function ContinueHero({ item, onResume }: { item: ShelfItem; onResume: () => voi
     >
       <BookCover title={item.doc.title} large />
       <div className="min-w-0 flex-1">
-        <p className="text-[10px] uppercase tracking-[0.3em] text-ember/70">Continue reading</p>
+        <p className="text-[10px] uppercase tracking-[0.3em] text-ember/70">Return to the arena</p>
         <p className="mt-1 truncate font-serif text-2xl text-foreground">{item.doc.title}</p>
         {item.doc.author && (
           <p className="truncate text-sm text-muted-foreground">by {item.doc.author}</p>
         )}
         <div className="mt-4 flex items-center gap-3">
           <KindleBar pct={item.pct} />
-          <span className="shrink-0 text-xs text-ember">{item.pct}% kindled</span>
+          <span className="shrink-0 text-xs text-ember">{item.pct}% survived</span>
         </div>
       </div>
-      <Flame className="hidden h-6 w-6 shrink-0 text-ember group-hover:animate-flicker sm:block" />
+      <Mockingjay className="hidden h-8 w-8 shrink-0 pin-glow transition-transform group-hover:scale-110 sm:block" />
     </button>
   );
 }
@@ -255,7 +256,7 @@ function BookCard({
       <div className="mt-4 flex items-center gap-3">
         <KindleBar pct={item.pct} />
         <span className="shrink-0 text-[11px] text-ember">
-          {item.finished ? "Finished" : `${item.pct}%`}
+          {item.finished ? "Victor" : `${item.pct}% survived`}
         </span>
       </div>
 
@@ -385,9 +386,11 @@ function EmptyState({
 }) {
   return (
     <>
-      <section className="px-6 sm:px-10 pt-12 sm:pt-20 pb-20 max-w-4xl mx-auto text-center">
+      <section className="relative px-6 sm:px-10 pt-12 sm:pt-20 pb-20 max-w-4xl mx-auto text-center">
+        {/* The Mockingjay, smouldering over the page */}
+        <Mockingjay className="pointer-events-none absolute left-1/2 top-0 -z-10 w-[440px] -translate-x-1/2 -translate-y-16 opacity-[0.08]" />
         <p className="text-xs uppercase tracking-[0.4em] text-ember mb-6 animate-fade-up">
-          — A spark for the page —
+          — Welcome, tribute —
         </p>
         <h1
           className="font-display font-black tracking-tight text-5xl sm:text-7xl leading-[1.05] animate-fade-up"
@@ -401,8 +404,8 @@ function EmptyState({
           className="mt-8 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto font-serif italic animate-fade-up"
           style={{ animationDelay: "0.2s" }}
         >
-          PDFs were built for paper. WeReadPDF strips them to their flame — clean, flowing text you
-          can actually read on any screen.
+          PDFs were built for paper. WeReadPDF reaps them into clean, flowing text you can actually
+          read on any screen — every tribute read in your own private arena.
         </p>
 
         <div className="mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
@@ -437,18 +440,18 @@ function EmptyState({
 const FEATURES = [
   {
     icon: BookOpen,
-    title: "Reader Mode",
-    body: "Flowing text styled like a real book. Adjustable font, width, spacing, and theme.",
+    title: "The Arena",
+    body: "Flowing text styled like a real book — screen-sized pages you turn with a tap. Font, width, spacing, and theme all bend to your will.",
   },
   {
     icon: Type,
-    title: "Typography Control",
-    body: "Garamond serif or Inter sans. Sizes from intimate to grand. Tune it like an instrument.",
+    title: "Tribute Typography",
+    body: "Garamond serif or Inter sans. Sizes from intimate to grand. Tune every letter like a weapon before the Games.",
   },
   {
     icon: Lock,
-    title: "Privacy First",
-    body: "Every page is processed in your browser. Nothing is uploaded. Nothing is tracked.",
+    title: "Sealed in Your District",
+    body: "Every page is reaped in your browser. Nothing is uploaded. Nothing is tracked. No Capitol watching.",
   },
 ];
 

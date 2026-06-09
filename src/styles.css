@@ -61,48 +61,53 @@
   --font-sans: "Inter", sans-serif;
   --font-dyslexic: "OpenDyslexic", "Comic Sans MS", sans-serif;
 
-  --shadow-ember: 0 0 40px -10px var(--ember-glow);
-  --gradient-ember: linear-gradient(135deg, oklch(0.55 0.18 35), oklch(0.7 0.2 50));
-  --gradient-dark: radial-gradient(ellipse at top, oklch(0.16 0.02 30) 0%, oklch(0.08 0.01 25) 60%);
+  --shadow-ember: 0 0 50px -10px var(--ember-glow);
+  --gradient-ember: linear-gradient(135deg, oklch(0.84 0.14 82), oklch(0.6 0.19 45));
+  --gradient-dark: radial-gradient(ellipse at top, oklch(0.13 0.018 55) 0%, oklch(0.06 0.008 45) 60%);
 }
 
 :root {
   --radius: 0.5rem;
 
-  /* Dark, Hunger Games inspired — charcoal, ash, ember gold */
-  --background: oklch(0.11 0.012 30);
-  --foreground: oklch(0.92 0.02 70);
+  /* Catching Fire — near-black night, molten gold Mockingjay, ember flame.
+     The app shell is dark and cinematic (the Quarter Quell at night); the
+     reading page itself is Kindle-white (see the "light" reader theme). Almost
+     no chroma in the darks so the gold and ember accents do all the talking. */
+  --background: oklch(0.09 0.008 50);
+  --foreground: oklch(0.9 0.02 82);
 
-  --card: oklch(0.15 0.015 30);
-  --card-foreground: oklch(0.92 0.02 70);
+  --card: oklch(0.13 0.011 50);
+  --card-foreground: oklch(0.9 0.02 82);
 
-  --popover: oklch(0.13 0.015 30);
-  --popover-foreground: oklch(0.92 0.02 70);
+  --popover: oklch(0.11 0.01 50);
+  --popover-foreground: oklch(0.9 0.02 82);
 
-  --primary: oklch(0.7 0.18 55);
-  --primary-foreground: oklch(0.12 0.02 30);
+  --primary: oklch(0.8 0.14 85);
+  --primary-foreground: oklch(0.12 0.02 60);
 
-  --secondary: oklch(0.2 0.015 30);
-  --secondary-foreground: oklch(0.9 0.02 70);
+  --secondary: oklch(0.18 0.012 50);
+  --secondary-foreground: oklch(0.9 0.02 82);
 
-  --muted: oklch(0.18 0.012 30);
-  --muted-foreground: oklch(0.6 0.02 60);
+  --muted: oklch(0.16 0.01 50);
+  --muted-foreground: oklch(0.62 0.02 72);
 
-  --accent: oklch(0.55 0.18 35);
-  --accent-foreground: oklch(0.97 0.02 70);
+  --accent: oklch(0.62 0.18 48);
+  --accent-foreground: oklch(0.97 0.02 82);
 
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.97 0.02 70);
+  --destructive: oklch(0.58 0.21 25);
+  --destructive-foreground: oklch(0.97 0.02 82);
 
-  --border: oklch(0.25 0.02 40);
-  --input: oklch(0.22 0.015 30);
-  --ring: oklch(0.7 0.18 55);
+  --border: oklch(0.24 0.014 55);
+  --input: oklch(0.2 0.012 50);
+  --ring: oklch(0.8 0.14 85);
 
-  --ember: oklch(0.65 0.2 45);
-  --ember-glow: oklch(0.7 0.22 50 / 0.4);
-  --ash: oklch(0.4 0.01 40);
-  --parchment: oklch(0.88 0.04 75);
+  /* The Mockingjay's molten gold, and the ember glow of the girl on fire. */
+  --ember: oklch(0.82 0.14 82);
+  --ember-glow: oklch(0.7 0.2 52 / 0.5);
+  --ash: oklch(0.4 0.012 55);
+  --parchment: oklch(0.9 0.03 82);
 
+  /* Sepia stays deliberately warm — it's an opt-in low-blue reading mode. */
   --sepia-bg: oklch(0.92 0.04 80);
   --sepia-fg: oklch(0.25 0.03 50);
 }
@@ -121,8 +126,8 @@
   body {
     font-family: var(--font-sans);
     background-image:
-      radial-gradient(ellipse at top, oklch(0.18 0.03 35 / 0.6) 0%, transparent 60%),
-      radial-gradient(ellipse at bottom, oklch(0.14 0.02 30 / 0.4) 0%, transparent 50%);
+      radial-gradient(ellipse at top, oklch(0.2 0.05 55 / 0.5) 0%, transparent 55%),
+      radial-gradient(ellipse at bottom, oklch(0.16 0.06 40 / 0.35) 0%, transparent 50%);
     background-attachment: fixed;
   }
 
@@ -141,6 +146,11 @@
   box-shadow:
     0 0 30px -8px var(--ember-glow),
     inset 0 1px 0 oklch(1 0 0 / 0.05);
+}
+
+/* Ember halo for the Mockingjay pin — the girl on fire glowing in the dark. */
+@utility pin-glow {
+  filter: drop-shadow(0 0 10px var(--ember-glow));
 }
 
 @keyframes ember-flicker {

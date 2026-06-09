@@ -11,9 +11,9 @@ import {
   BookOpen,
   ArrowLeft,
   Search,
-  Flame,
 } from "lucide-react";
 import type { CachedDoc, FontFamily, ReaderTheme } from "@/lib/reader-store";
+import { Mockingjay } from "./Mockingjay";
 import {
   FONT_VARS,
   loadSettings,
@@ -47,10 +47,12 @@ const THEMES: Record<
   ReaderTheme,
   { label: string; icon: typeof Moon; bg: [number, number, number]; fg: [number, number, number] }
 > = {
-  dark: { label: "Charcoal", icon: Moon, bg: [0.17, 0.012, 40], fg: [0.85, 0.018, 72] },
-  night: { label: "Midnight", icon: MoonStar, bg: [0.12, 0.01, 35], fg: [0.73, 0.016, 65] },
+  // Kindle-white paper is the default reading surface — clean, barely-warm white
+  // with near-black ink, just like an e-ink page.
+  light: { label: "Paper", icon: Sun, bg: [0.99, 0.002, 95], fg: [0.22, 0.008, 60] },
   sepia: { label: "Sepia", icon: BookOpen, bg: [0.92, 0.04, 82], fg: [0.3, 0.035, 55] },
-  light: { label: "Paper", icon: Sun, bg: [0.985, 0.004, 85], fg: [0.24, 0.02, 50] },
+  dark: { label: "Charcoal", icon: Moon, bg: [0.16, 0.01, 55], fg: [0.86, 0.018, 80] },
+  night: { label: "Midnight", icon: MoonStar, bg: [0.1, 0.008, 50], fg: [0.78, 0.016, 78] },
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -277,8 +279,8 @@ export function Reader({ doc, onExit }: Props) {
             <ChevronLeft className="w-4 h-4" /> Prev
           </button>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Flame className="w-3 h-3 text-ember animate-flicker" />
-            <span>{Math.round(progress)}% kindled</span>
+            <Mockingjay className="w-4 h-4 pin-glow" />
+            <span>{Math.round(progress)}% survived</span>
           </div>
           <button
             onClick={() => bookRef.current?.next()}

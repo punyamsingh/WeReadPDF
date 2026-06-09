@@ -46,7 +46,7 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
         <div className="flex flex-col items-center gap-3 text-ember">
           <Loader2 className="w-6 h-6 animate-spin" />
           <p className="text-sm uppercase tracking-[0.25em]">
-            Kindling page {progress.loaded} {progress.total ? `of ${progress.total}` : ""}
+            Reaping page {progress.loaded} {progress.total ? `of ${progress.total}` : ""}
           </p>
           {progress.total > 0 && (
             <div className="w-full max-w-xs h-1 bg-border/40 rounded overflow-hidden">
@@ -61,9 +61,11 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
         <div className="flex flex-col items-center gap-3">
           <Upload className={`text-ember ${compact ? "w-5 h-5" : "w-6 h-6"}`} />
           <p className="font-display uppercase tracking-[0.25em] text-sm text-center">
-            {compact ? "Add another book" : "Drop a PDF or click to choose"}
+            {compact ? "Reap another tribute" : "Offer a tribute"}
           </p>
-          {!compact && <p className="text-xs text-muted-foreground">Up to a few hundred pages</p>}
+          {!compact && (
+            <p className="text-xs text-muted-foreground">Drop a PDF or click — up to a few hundred pages</p>
+          )}
         </div>
       )}
       {error && <p className="mt-4 text-sm text-destructive text-center">{error}</p>}
