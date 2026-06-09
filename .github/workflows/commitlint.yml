@@ -1,0 +1,24 @@
+name: Commitlint
+
+# Validates that every commit in a PR follows Conventional Commits. Because the
+# repo uses merge commits, these commits land on main verbatim and drive the
+# semantic-release version bump, so they must be well-formed.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Lint PR commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need the full range of PR commits to lint each one.
+          fetch-depth: 0
+
+      - name: Lint commits
+        uses: wagoid/commitlint-github-action@v6

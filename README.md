@@ -144,6 +144,12 @@ Commit messages drive the version bump:
 | `feat!: …` / `BREAKING CHANGE:`   | major (**x**.0.0) |
 | `chore: …`, `docs: …`, `refactor: …`, etc. | no release |
 
+**Commit linting.** A [`Commitlint`](.github/workflows/commitlint.yml) workflow
+checks every commit in a pull request against the Conventional Commits spec
+([`commitlint.config.js`](commitlint.config.js)), so a merged PR always produces
+a valid release. Add it as a required status check to block non-conforming
+commits from landing on `main`.
+
 > **Note:** if `main` is a protected branch, allow the GitHub Actions token (or
 > grant the bot) permission to push directly so the release commit can land.
 
