@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react";
 import { Upload, Flame, BookOpen, Lock, Type, Loader2 } from "lucide-react";
 import { extractPdf } from "@/lib/pdf-extract";
-import { cacheDoc, loadCachedDoc, clearCachedDoc, type CachedDoc } from "@/lib/reader-store";
+import { saveDoc, loadLastDoc, loadProgress, type CachedDoc } from "@/lib/reader-store";
 import { Reader } from "./Reader";
 
 export function App() {
   const [doc, setDoc] = useState<CachedDoc | null>(null);
+  const [lastDoc, setLastDoc] = useState<CachedDoc | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => {
-    const cached = loadCachedDoc();
-    if (cached) setDoc(cached);
+    loadLastDoc()
+      .then((cached) => {
+        if (cached) setLastDoc(cached);
+      })
+      .catch(() => {});
   }, []);
 
   async function handleFile(file: File) {
@@ -21,6 +26,7 @@ export function App() {
       return;
     }
     setError(null);
+    setWarning(null);
     setLoading(true);
     setProgress({ loaded: 0, total: 0 });
     try {
@@ -35,7 +41,14 @@ export function App() {
         wordCount: extracted.wordCount,
         savedAt: Date.now(),
       };
-      cacheDoc(cached);
+      try {
+        await saveDoc(cached);
+      } catch (saveErr) {
+        // Reading still works this session; we just couldn't persist it.
+        console.error(saveErr);
+        setWarning("Couldn't save this book for later — you can still read it now.");
+      }
+      setLastDoc(cached);
       setDoc(cached);
     } catch (e) {
       console.error(e);
@@ -49,10 +62,9 @@ export function App() {
     return (
       <Reader
         doc={doc}
-        onExit={() => {
-          setDoc(null);
-          clearCachedDoc();
-        }}
+        // Exiting returns to the landing screen but keeps the book stored,
+        // so the reader can be resumed from "Continue reading".
+        onExit={() => setDoc(null)}
       />
     );
   }
@@ -98,9 +110,19 @@ export function App() {
           clean, flowing text you can actually read on any screen.
         </p>
 
+        {lastDoc && !loading && (
+          <div className="mt-10 animate-fade-up" style={{ animationDelay: "0.25s" }}>
+            <ContinueCard doc={lastDoc} onResume={() => setDoc(lastDoc)} />
+          </div>
+        )}
+
         <div className="mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
           <DropZone loading={loading} progress={progress} error={error} onFile={handleFile} />
         </div>
+
+        {warning && (
+          <p className="mt-4 text-sm text-amber-400/80 text-center">{warning}</p>
+        )}
 
         <p className="mt-6 text-xs text-muted-foreground/60 tracking-wide">
           Files never leave your device. No upload. No account. No trace.
@@ -143,6 +165,24 @@ export function App() {
         <span className="font-display uppercase tracking-[0.3em]">WeReadPDF</span> — kindled locally, in your browser.
       </footer>
     </div>
+  );
+}
+
+function ContinueCard({ doc, onResume }: { doc: CachedDoc; onResume: () => void }) {
+  const prog = loadProgress(doc.key);
+  const pct = prog ? Math.round((prog.pageNumber / Math.max(1, prog.total)) * 100) : 0;
+  return (
+    <button
+      onClick={onResume}
+      className="group mx-auto flex w-full max-w-xl items-center gap-4 rounded-lg border border-ember/30 bg-card/40 px-5 py-4 text-left backdrop-blur transition-all hover:border-ember/60 hover:bg-card/70 ember-glow"
+    >
+      <Flame className="h-5 w-5 shrink-0 text-ember group-hover:animate-flicker" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] uppercase tracking-[0.3em] text-ember/70">Continue reading</p>
+        <p className="truncate font-serif text-lg text-foreground">{doc.title}</p>
+      </div>
+      <span className="shrink-0 text-xs text-muted-foreground">{pct}% kindled</span>
+    </button>
   );
 }
 
