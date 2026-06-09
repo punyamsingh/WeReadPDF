@@ -66,14 +66,34 @@ function buildBlocks(doc: CachedDoc): Block[] {
  * position back to the PDF page (for progress, resume and TOC jumps). Shared
  * layout: the parent decides whether to lay this out in columns (paged).
  */
-function FlowContent({ blocks, settings }: { blocks: Block[]; settings: ReaderSettings }) {
+function FlowContent({
+  blocks,
+  settings,
+  chapterStarts,
+}: {
+  blocks: Block[];
+  settings: ReaderSettings;
+  /** Source pages where a chapter/section begins — each forces a fresh page. */
+  chapterStarts: Set<number>;
+}) {
   const indented = settings.paragraphStyle === "indented";
   const firstPage = blocks[0]?.srcPage;
   return (
     <>
       {blocks.map((b) => (
         <Fragment key={b.srcPage}>
-          <span data-src={b.srcPage} aria-hidden="true" style={{ display: "block", height: 0 }} />
+          <span
+            data-src={b.srcPage}
+            aria-hidden="true"
+            style={{
+              display: "block",
+              height: 0,
+              // A chapter starts on its own page: force a column break before its
+              // anchor (but never before the very first page of the book).
+              breakBefore:
+                chapterStarts.has(b.srcPage) && b.srcPage !== firstPage ? "column" : undefined,
+            }}
+          />
           {b.paras.map((para, i) => (
             <p
               key={i}
@@ -111,6 +131,12 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
+  // Source pages that begin a chapter/section (from the outline) — each one
+  // starts on a fresh page via a forced column break.
+  const chapterStarts = useMemo(
+    () => new Set(doc.outline.map((o) => o.pageNumber)),
+    [doc],
+  );
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -332,7 +358,7 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           willChange: "transform",
         }}
       >
-        <FlowContent blocks={blocks} settings={settings} />
+        <FlowContent blocks={blocks} settings={settings} chapterStarts={chapterStarts} />
       </div>
     </div>
   );
