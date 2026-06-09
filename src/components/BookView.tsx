@@ -46,9 +46,15 @@ interface Block {
 // Breathing room inside each screen. The horizontal value is a baseline; the
 // reader's "side margin" setting adds to it, and on wide screens it grows to
 // keep the line length near the chosen measure.
+//
+// The top/bottom values must clear the reader's chrome, which overlays the page
+// as absolute bars (~59px header, ~57px footer) rather than taking flow space —
+// otherwise the first and last lines of a column render behind them. We keep the
+// padding constant whether the chrome is shown or hidden so toggling it never
+// reflows the text.
 const BASE_X = 22;
-const PAD_TOP = 40;
-const PAD_BOTTOM = 52;
+const PAD_TOP = 72;
+const PAD_BOTTOM = 64;
 
 function buildBlocks(doc: CachedDoc): Block[] {
   return doc.pages.map((p) => ({
