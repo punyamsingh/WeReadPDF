@@ -1,4 +1,20 @@
+export type FontFamily = "serif" | "sans" | "literata" | "dyslexic";
 export type ReaderTheme = "dark" | "night" | "sepia" | "light";
+
+/** Maps a font choice to its CSS custom property (defined in styles.css). */
+export const FONT_VARS: Record<FontFamily, string> = {
+  serif: "var(--font-serif)",
+  literata: "var(--font-literata)",
+  sans: "var(--font-sans)",
+  dyslexic: "var(--font-dyslexic)",
+};
+/**
+ * How paragraphs are separated:
+ * - "indented": first-line indent, snug leading between paragraphs — the
+ *   classic novel look that reads as continuous, cozy prose.
+ * - "spaced": a blank-line gap between paragraphs (article/web style).
+ */
+export type ParagraphStyle = "indented" | "spaced";
 
 export interface ReaderSettings {
   fontSize: number;
@@ -7,17 +23,41 @@ export interface ReaderSettings {
   measure: number;
   /** Reading-surface brightness multiplier (0.85 = dimmer, 1.15 = brighter). */
   brightness: number;
-  fontFamily: "serif" | "sans";
+  fontFamily: FontFamily;
   theme: ReaderTheme;
+  /** Justify body text (off = left-aligned, which reads better on narrow columns). */
+  justify: boolean;
+  /** Auto-hyphenate body text. */
+  hyphens: boolean;
+  /** Horizontal padding (px) inside the text column — distinct from content width. */
+  margin: number;
+  /** Paragraph separation: indented (book) or spaced (article). */
+  paragraphStyle: ParagraphStyle;
+  /** Vertical gap between paragraphs, in em. Only used in "spaced" style. */
+  paragraphSpacing: number;
+  /** Letter tracking, in em. */
+  letterSpacing: number;
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 19,
-  lineHeight: 1.7,
+  // Snug, book-like leading. The previous 1.7 left airy gaps on thin,
+  // small-x-height serifs and read cold rather than cozy.
+  lineHeight: 1.5,
   measure: 66,
   brightness: 1,
   fontFamily: "serif",
   theme: "dark",
+  // Left-aligned, no hyphenation by default — the previous hard-coded
+  // justify+hyphens produced ugly rivers on narrow mobile columns.
+  justify: false,
+  hyphens: false,
+  margin: 0,
+  // Indented paragraphs by default — the classic novel look reads as warm,
+  // continuous prose instead of disconnected web blocks.
+  paragraphStyle: "indented",
+  paragraphSpacing: 1,
+  letterSpacing: 0,
 };
 
 const SETTINGS_KEY = "wereadpdf.settings";

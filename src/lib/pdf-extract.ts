@@ -31,23 +31,38 @@ export async function extractPdf(
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
+
+    // Group text items into physical lines, remembering each line's left edge
+    // (transform[4]) and baseline (transform[5]). The geometry is what lets us
+    // later tell a real paragraph break from a soft line-wrap.
+    const lines: Line[] = [];
+    let cur = "";
+    let curX: number | null = null;
     let lastY: number | null = null;
-    let text = "";
+
+    const flushLine = () => {
+      const s = cur.replace(/\s+/g, " ").trim();
+      if (s) lines.push({ str: s, x: curX ?? 0, y: lastY ?? 0 });
+      cur = "";
+      curX = null;
+    };
+
     for (const item of content.items as Array<{
       str: string;
       transform: number[];
       hasEOL?: boolean;
     }>) {
+      const x = item.transform?.[4];
       const y = item.transform?.[5];
-      if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 2) {
-        text += "\n";
-      }
-      text += item.str;
-      if (item.hasEOL) text += "\n";
-      else text += " ";
-      lastY = y ?? lastY;
+      if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 2) flushLine();
+      if (curX === null && x !== undefined) curX = x;
+      cur += item.str;
+      if (item.hasEOL) cur += " ";
+      if (y !== undefined) lastY = y;
     }
-    pages.push({ pageNumber: i, text: cleanText(text) });
+    flushLine();
+
+    pages.push({ pageNumber: i, text: reflowParagraphs(lines) });
     onProgress?.(i, pdf.numPages);
   }
 
@@ -161,12 +176,68 @@ function detectChapters(pages: ExtractedPage[]): Array<{ title: string; pageNumb
   return out;
 }
 
-function cleanText(t: string): string {
-  return t
-    .replace(/[ \t]+/g, " ")
-    .replace(/ ?\n ?/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+interface Line {
+  str: string;
+  /** Left edge of the line in PDF points. */
+  x: number;
+  /** Baseline (vertical position) in PDF points; larger = higher on the page. */
+  y: number;
+}
+
+const median = (arr: number[]) =>
+  arr.length ? [...arr].sort((a, b) => a - b)[Math.floor(arr.length / 2)] : 0;
+
+/**
+ * Reconstruct paragraphs from a page's physical lines.
+ *
+ * PDFs have no notion of a paragraph — they only place lines. Treating every
+ * line break as a paragraph (the old behaviour) made each wrapped line its own
+ * block, which reads as a cold, ragged list on a phone. Instead we join lines
+ * into flowing paragraphs and only start a new one when the layout actually
+ * signals it: a noticeably larger vertical gap, or a first-line indent. Words
+ * hyphenated across a soft wrap ("fin-" + "gers") are stitched back together.
+ */
+function reflowParagraphs(lines: Line[]): string {
+  if (lines.length <= 1) return lines[0]?.str ?? "";
+
+  // Typical line-to-line spacing, and the body's left margin (a low percentile
+  // so the occasional indented first line doesn't drag the margin rightward).
+  const gaps: number[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const g = lines[i - 1].y - lines[i].y;
+    if (g > 0) gaps.push(g);
+  }
+  const lineGap = median(gaps);
+  const sortedX = lines.map((l) => l.x).sort((a, b) => a - b);
+  const bodyLeft = sortedX[Math.floor(sortedX.length * 0.1)];
+
+  const gapBreak = lineGap > 0 ? lineGap * 1.6 : Infinity;
+  const indentBreak = Math.max(6, lineGap * 0.5);
+
+  const paragraphs: string[] = [];
+  let buf = lines[0].str;
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1];
+    const line = lines[i];
+    const newParagraph = prev.y - line.y > gapBreak || line.x - bodyLeft > indentBreak;
+
+    if (newParagraph) {
+      paragraphs.push(buf);
+      buf = line.str;
+    } else if (/[-\u2010\u00ad]$/.test(buf) && /^[a-z]/.test(line.str)) {
+      // Soft-wrap hyphenation: drop the hyphen and glue the word back together.
+      // Restricted to plain/soft hyphens so real em/en dashes are preserved.
+      buf = buf.replace(/[-\u2010\u00ad]$/, "") + line.str;
+    } else {
+      buf = `${buf} ${line.str}`;
+    }
+  }
+  paragraphs.push(buf);
+
+  return paragraphs
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 async function flattenOutline(

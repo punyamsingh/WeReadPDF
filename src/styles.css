@@ -4,6 +4,25 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* OpenDyslexic — a dyslexia-friendly reading font, self-loaded from the
+   Fontsource CDN (consistent with the Google Fonts CDN used in __root.tsx). */
+@font-face {
+  font-family: "OpenDyslexic";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/opendyslexic@latest/latin-400-normal.woff2")
+    format("woff2");
+}
+@font-face {
+  font-family: "OpenDyslexic";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/opendyslexic@latest/latin-700-normal.woff2")
+    format("woff2");
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -38,7 +57,9 @@
 
   --font-display: "Cinzel", serif;
   --font-serif: "Cormorant Garamond", serif;
+  --font-literata: "Literata", Georgia, serif;
   --font-sans: "Inter", sans-serif;
+  --font-dyslexic: "OpenDyslexic", "Comic Sans MS", sans-serif;
 
   --shadow-ember: 0 0 40px -10px var(--ember-glow);
   --gradient-ember: linear-gradient(135deg, oklch(0.55 0.18 35), oklch(0.7 0.2 50));
@@ -87,9 +108,15 @@
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
+  * {
+    border-color: var(--color-border);
+  }
 
-  html, body { background-color: var(--color-background); color: var(--color-foreground); }
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
 
   body {
     font-family: var(--font-sans);
@@ -99,7 +126,10 @@
     background-attachment: fixed;
   }
 
-  ::selection { background: var(--ember); color: var(--primary-foreground); }
+  ::selection {
+    background: var(--ember);
+    color: var(--primary-foreground);
+  }
 }
 
 @utility text-ember {
@@ -108,12 +138,21 @@
 }
 
 @utility ember-glow {
-  box-shadow: 0 0 30px -8px var(--ember-glow), inset 0 1px 0 oklch(1 0 0 / 0.05);
+  box-shadow:
+    0 0 30px -8px var(--ember-glow),
+    inset 0 1px 0 oklch(1 0 0 / 0.05);
 }
 
 @keyframes ember-flicker {
-  0%, 100% { opacity: 1; filter: brightness(1); }
-  50% { opacity: 0.85; filter: brightness(1.15); }
+  0%,
+  100% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.85;
+    filter: brightness(1.15);
+  }
 }
 
 @utility animate-flicker {
@@ -121,8 +160,14 @@
 }
 
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @utility animate-fade-up {

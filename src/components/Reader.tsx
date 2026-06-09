@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Settings,
   List,
@@ -13,15 +13,16 @@ import {
   Search,
   Flame,
 } from "lucide-react";
-import type { CachedDoc, ReaderTheme } from "@/lib/reader-store";
+import type { CachedDoc, FontFamily, ReaderTheme } from "@/lib/reader-store";
 import {
+  FONT_VARS,
   loadSettings,
   saveSettings,
   saveProgress,
   loadProgress,
-  DEFAULT_SETTINGS,
   type ReaderSettings,
 } from "@/lib/reader-store";
+import { BookView, type BookApi, type ReadingPosition } from "./BookView";
 
 interface Props {
   doc: CachedDoc;
@@ -29,6 +30,13 @@ interface Props {
 }
 
 const WORDS_PER_MINUTE = 230;
+
+const FONT_OPTIONS: Array<{ id: FontFamily; label: string }> = [
+  { id: "serif", label: "Garamond" },
+  { id: "literata", label: "Literata" },
+  { id: "sans", label: "Inter" },
+  { id: "dyslexic", label: "Dyslexic" },
+];
 
 // Reading surfaces are tuned by hand for comfortable contrast rather than
 // maximum contrast. Pure-white-on-black (the old default) glows and smears in
@@ -52,46 +60,96 @@ function oklch([l, c, h]: [number, number, number], alpha?: number) {
   return `oklch(${l.toFixed(3)} ${c} ${h}${a})`;
 }
 
+const HINT_KEY = "wereadpdf.tapHintSeen";
+
 export function Reader({ doc, onExit }: Props) {
-  const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
-  const [page, setPage] = useState(1);
+  const [settings, setSettings] = useState<ReaderSettings>(() => loadSettings());
+  const [restorePage] = useState(() =>
+    Math.min(loadProgress(doc.key)?.pageNumber ?? 1, doc.pages.length),
+  );
+  const [pos, setPos] = useState<ReadingPosition>({
+    sourcePage: restorePage,
+    fraction: 0,
+    page: 1,
+    total: 1,
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [showToc, setShowToc] = useState(false);
   const [query, setQuery] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setSettings(loadSettings());
-    const prog = loadProgress(doc.key);
-    if (prog) setPage(Math.min(prog.pageNumber, doc.pages.length));
-  }, [doc.key, doc.pages.length]);
-
-  useEffect(() => {
-    saveProgress(doc.key, page, doc.pages.length);
-    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-  }, [page, doc.key, doc.pages.length]);
+  const [chrome, setChrome] = useState(true);
+  const [showHint, setShowHint] = useState(() => {
+    try {
+      return !localStorage.getItem(HINT_KEY);
+    } catch {
+      return false;
+    }
+  });
+  const bookRef = useRef<BookApi>(null);
+  const lastPageRef = useRef(0);
 
   useEffect(() => {
     saveSettings(settings);
   }, [settings]);
 
   useEffect(() => {
+    if (pos.sourcePage > 0) saveProgress(doc.key, pos.sourcePage, doc.pages.length);
+  }, [pos.sourcePage, doc.key, doc.pages.length]);
+
+  // Open with the chrome visible so controls are discoverable, then melt it
+  // away for an immersive page after a moment.
+  useEffect(() => {
+    const id = setTimeout(() => setChrome(false), 2800);
+    return () => clearTimeout(id);
+  }, []);
+
+  const dismissHint = useCallback(() => {
+    setShowHint((seen) => {
+      if (seen) {
+        try {
+          localStorage.setItem(HINT_KEY, "1");
+        } catch {
+          /* ignore */
+        }
+      }
+      return false;
+    });
+  }, []);
+
+  // Turning a page is proof the reader found the controls — retire the hint.
+  useEffect(() => {
+    if (lastPageRef.current && pos.page !== lastPageRef.current) dismissHint();
+    lastPageRef.current = pos.page;
+  }, [pos.page, dismissHint]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
-      if (e.key === "ArrowRight" || e.key === " ")
-        setPage((p) => Math.min(doc.pages.length, p + 1));
-      if (e.key === "ArrowLeft") setPage((p) => Math.max(1, p - 1));
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+        e.preventDefault();
+        bookRef.current?.next();
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault();
+        bookRef.current?.prev();
+      } else if (e.key === "Escape") {
+        setShowSettings(false);
+        setShowToc(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc.pages.length]);
+  }, []);
 
-  const current = doc.pages[page - 1];
-  const wordsRemaining = useMemo(() => {
-    return doc.pages.slice(page - 1).reduce((acc, p) => acc + p.text.split(/\s+/).length, 0);
-  }, [doc.pages, page]);
-  const minutesLeft = Math.max(1, Math.round(wordsRemaining / WORDS_PER_MINUTE));
-  const progress = (page / doc.pages.length) * 100;
+  const handleChange = useCallback((p: ReadingPosition) => setPos(p), []);
+  const onCenterTap = useCallback(() => {
+    dismissHint();
+    setChrome((c) => !c);
+  }, [dismissHint]);
+
+  const progress = pos.fraction * 100;
+  const minutesLeft = Math.max(
+    1,
+    Math.round((doc.wordCount * (1 - pos.fraction)) / WORDS_PER_MINUTE),
+  );
 
   const surface = useMemo(() => {
     const palette = THEMES[settings.theme] ?? THEMES.dark;
@@ -101,11 +159,10 @@ export function Reader({ doc, onExit }: Props) {
     const bg: [number, number, number] = [clamp(bgL * settings.brightness, 0.07, 0.99), bgC, bgH];
     const fg = palette.fg;
     return {
-      // Inline styles for the reading root.
+      fg,
       root: { background: oklch(bg), color: oklch(fg) },
       // Header/footer float above the surface — tint them from the same color
-      // so the chrome matches the page in every theme (the old translucent
-      // near-black looked wrong on the light/sepia surfaces).
+      // so the chrome matches the page in every theme.
       chrome: {
         backgroundColor: oklch(bg, 0.72),
         borderColor: oklch(fg, 0.12),
@@ -119,9 +176,14 @@ export function Reader({ doc, onExit }: Props) {
   );
 
   return (
-    <div className="min-h-screen flex flex-col" style={surface.root}>
-      {/* Top bar */}
-      <header className="sticky top-0 z-30 backdrop-blur-xl border-b" style={surface.chrome}>
+    <div className="relative flex h-[100dvh] flex-col overflow-hidden" style={surface.root}>
+      {/* Top bar — auto-hides while reading */}
+      <header
+        className={`absolute inset-x-0 top-0 z-30 backdrop-blur-xl border-b transition-all duration-300 ${
+          chrome ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0 pointer-events-none"
+        }`}
+        style={surface.chrome}
+      >
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 max-w-[1400px] mx-auto w-full">
           <button
             onClick={onExit}
@@ -161,47 +223,55 @@ export function Reader({ doc, onExit }: Props) {
         </div>
       </header>
 
-      {/* Reader surface */}
-      <main ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-8 py-12 sm:py-20">
-        <article
-          className="mx-auto animate-fade-up"
-          style={{
-            // Width follows the font size via the `ch` unit, so the line length
-            // (the "measure") stays in the comfortable 45–90 character range no
-            // matter how large the type is. `min(100%, …)` lets it shrink to fit
-            // narrow screens instead of forcing a fixed pixel column.
-            width: `min(100%, ${settings.measure}ch)`,
-            fontFamily: settings.fontFamily === "serif" ? "var(--font-serif)" : "var(--font-sans)",
-            fontSize: `${settings.fontSize}px`,
-            lineHeight: settings.lineHeight,
-          }}
+      {/* The book */}
+      <BookView
+        ref={bookRef}
+        doc={doc}
+        settings={settings}
+        initialSourcePage={restorePage}
+        onChange={handleChange}
+        onCenterTap={onCenterTap}
+      />
+
+      {/* First-run tap hint */}
+      {showHint && (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-between px-8 text-[11px] uppercase tracking-[0.25em]"
+          style={{ color: oklch(surface.fg, 0.45) }}
         >
-          <div className="flex items-center gap-3 mb-10 opacity-60">
-            <span className="font-display text-xs tracking-[0.4em] uppercase">
-              Page {page} of {doc.pages.length}
-            </span>
-            <div className="h-px flex-1 bg-current opacity-30" />
-            <span className="text-xs">{minutesLeft} min left</span>
-          </div>
+          <span>‹ prev</span>
+          <span className="text-center leading-relaxed">
+            tap edges to turn
+            <br />
+            center for menu
+          </span>
+          <span>next ›</span>
+        </div>
+      )}
 
-          {current?.text.split(/\n{2,}/).map((para, i) => (
-            <p key={i} className="mb-6" style={{ textAlign: "justify", hyphens: "auto" }}>
-              {para}
-            </p>
-          ))}
+      {/* Minimal always-on status when the chrome is hidden */}
+      {!chrome && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-2.5 text-[11px] tracking-wide"
+          style={{ color: oklch(surface.fg, 0.5) }}
+        >
+          <span>
+            {pos.page} / {pos.total} · {Math.round(progress)}% · {minutesLeft} min left
+          </span>
+        </div>
+      )}
 
-          {!current?.text.trim() && (
-            <p className="opacity-50 italic text-center">This page contains no extractable text.</p>
-          )}
-        </article>
-      </main>
-
-      {/* Footer nav */}
-      <footer className="sticky bottom-0 z-30 backdrop-blur-xl border-t" style={surface.chrome}>
+      {/* Footer nav — auto-hides while reading */}
+      <footer
+        className={`absolute inset-x-0 bottom-0 z-30 backdrop-blur-xl border-t transition-all duration-300 ${
+          chrome ? "translate-y-0 opacity-100" : "translate-y-full opacity-0 pointer-events-none"
+        }`}
+        style={surface.chrome}
+      >
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 max-w-[1400px] mx-auto w-full">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
+            onClick={() => bookRef.current?.prev()}
+            disabled={pos.page <= 1}
             className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-ember hover:bg-muted/30 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
             <ChevronLeft className="w-4 h-4" /> Prev
@@ -211,8 +281,8 @@ export function Reader({ doc, onExit }: Props) {
             <span>{Math.round(progress)}% kindled</span>
           </div>
           <button
-            onClick={() => setPage((p) => Math.min(doc.pages.length, p + 1))}
-            disabled={page >= doc.pages.length}
+            onClick={() => bookRef.current?.next()}
+            disabled={pos.page >= pos.total}
             className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-ember hover:bg-muted/30 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
             Next <ChevronRight className="w-4 h-4" />
@@ -268,18 +338,18 @@ export function Reader({ doc, onExit }: Props) {
 
             <SettingGroup label="Font">
               <div className="grid grid-cols-2 gap-2">
-                {(["serif", "sans"] as const).map((f) => (
+                {FONT_OPTIONS.map((f) => (
                   <button
-                    key={f}
-                    onClick={() => setSettings({ ...settings, fontFamily: f })}
+                    key={f.id}
+                    onClick={() => setSettings({ ...settings, fontFamily: f.id })}
                     className={`py-3 rounded-md border text-sm transition-all ${
-                      settings.fontFamily === f
+                      settings.fontFamily === f.id
                         ? "border-ember text-ember"
                         : "border-border text-muted-foreground hover:border-ember/40"
                     }`}
-                    style={{ fontFamily: f === "serif" ? "var(--font-serif)" : "var(--font-sans)" }}
+                    style={{ fontFamily: FONT_VARS[f.id] }}
                   >
-                    {f === "serif" ? "Garamond" : "Inter"}
+                    {f.label}
                   </button>
                 ))}
               </div>
@@ -320,6 +390,57 @@ export function Reader({ doc, onExit }: Props) {
               format={(v) => `${Math.round(v * 100)}%`}
               onChange={(v) => setSettings({ ...settings, brightness: v })}
             />
+            <SettingSlider
+              label="Side margin"
+              value={settings.margin}
+              min={0}
+              max={80}
+              step={4}
+              suffix="px"
+              onChange={(v) => setSettings({ ...settings, margin: v })}
+            />
+            {settings.paragraphStyle === "spaced" && (
+              <SettingSlider
+                label="Paragraph spacing"
+                value={settings.paragraphSpacing}
+                min={0.4}
+                max={2.5}
+                step={0.1}
+                suffix="em"
+                onChange={(v) => setSettings({ ...settings, paragraphSpacing: v })}
+              />
+            )}
+            <SettingSlider
+              label="Letter spacing"
+              value={settings.letterSpacing}
+              min={-0.02}
+              max={0.12}
+              step={0.01}
+              suffix="em"
+              onChange={(v) => setSettings({ ...settings, letterSpacing: v })}
+            />
+
+            <SettingGroup label="Text">
+              <div className="space-y-2">
+                <SettingToggle
+                  label="Indent paragraphs"
+                  checked={settings.paragraphStyle === "indented"}
+                  onChange={(v) =>
+                    setSettings({ ...settings, paragraphStyle: v ? "indented" : "spaced" })
+                  }
+                />
+                <SettingToggle
+                  label="Justify text"
+                  checked={settings.justify}
+                  onChange={(v) => setSettings({ ...settings, justify: v })}
+                />
+                <SettingToggle
+                  label="Hyphenation"
+                  checked={settings.hyphens}
+                  onChange={(v) => setSettings({ ...settings, hyphens: v })}
+                />
+              </div>
+            </SettingGroup>
           </div>
         </div>
       )}
@@ -357,11 +478,11 @@ export function Reader({ doc, onExit }: Props) {
                 <li key={i}>
                   <button
                     onClick={() => {
-                      setPage(item.pageNumber);
+                      bookRef.current?.goToSourcePage(item.pageNumber);
                       setShowToc(false);
                     }}
                     className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
-                      page === item.pageNumber
+                      pos.sourcePage === item.pageNumber
                         ? "bg-ember/10 text-ember"
                         : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                     }`}
@@ -392,6 +513,39 @@ function SettingGroup({ label, children }: { label: string; children: React.Reac
       <p className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground mb-3">{label}</p>
       {children}
     </div>
+  );
+}
+
+function SettingToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:border-ember/40"
+    >
+      <span>{label}</span>
+      <span
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-ember" : "bg-muted"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-background transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </span>
+    </button>
   );
 }
 
