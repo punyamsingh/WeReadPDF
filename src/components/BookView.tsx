@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
+import { type Block, buildBlocks, deriveTitles } from "@/lib/book-content";
 
 /** Imperative handle the surrounding chrome (footer, keyboard, TOC) drives. */
 export interface BookApi {
@@ -38,13 +39,6 @@ interface Props {
   onCenterTap: () => void;
 }
 
-interface Block {
-  srcPage: number;
-  paras: string[];
-  /** Word count, precomputed so progress never needs to re-scan the text. */
-  words: number;
-}
-
 // Breathing room inside each screen. The horizontal value is a baseline; the
 // reader's "side margin" setting adds to it, and on wide screens it grows to
 // keep the line length near the chosen measure.
@@ -71,40 +65,6 @@ const MAX_CHUNK_PAGES = 60;
 // chunks we haven't laid out yet. Refined from real measurements as the reader
 // moves, so the estimate sharpens the further they read.
 const DEFAULT_WORDS_PER_SCREEN = 200;
-
-const countWords = (s: string) => s.match(/\S+/g)?.length ?? 0;
-
-function buildBlocks(doc: CachedDoc): Block[] {
-  return doc.pages.map((p) => {
-    const paras = p.text
-      .split(/\n{2,}/)
-      .map((s) => s.replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-      // Safety net for docs cached before the extraction-time folio filter:
-      // drop a paragraph that is JUST a page number. We deliberately do NOT
-      // strip a number glued to the start of real prose here — that can't be
-      // told apart from legitimate number-initial text ("1984 was…") and would
-      // silently corrupt it; the extraction-time filter handles the glue at the
-      // source for any re-imported PDF.
-      .filter((s) => !/^\d{1,4}$/.test(s));
-    return {
-      srcPage: p.pageNumber,
-      paras,
-      words: paras.reduce((n, para) => n + countWords(para), 0),
-    };
-  });
-}
-
-/** Normalize an outline title for a chapter title page: de-indent and collapse
- *  whitespace, and strip a baked-in leading folio ONLY when it equals this
- *  entry's page number (a TOC line like "367 END OF BOOK ONE"). A genuine
- *  number-initial title ("12 Angry Men") is left untouched. */
-function cleanTitle(raw: string, pageNumber: number): string {
-  const t = raw.replace(/\s+/g, " ").trim();
-  const m = t.match(/^(\d{1,4})\s+(?=\p{L})/u);
-  if (m && Number(m[1]) === pageNumber) return t.slice(m[0].length).trim();
-  return t;
-}
 
 interface Chunk {
   index: number;
@@ -322,22 +282,10 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
-  // Map each chapter/section's source page → its display title (from the
-  // outline). The first outline entry for a page wins; titles are de-indented
-  // and have any baked-in leading page number stripped ("367 END OF BOOK ONE"
-  // → "END OF BOOK ONE"). Synthetic "Page N" fallback markers get no card.
-  const titleForSrc = useMemo(() => {
-    const m = new Map<number, string>();
-    for (const o of doc.outline) {
-      if (/^page \d+$/i.test(o.title.trim())) continue;
-      const t = cleanTitle(o.title, o.pageNumber);
-      if (t && !m.has(o.pageNumber)) m.set(o.pageNumber, t);
-    }
-    return m;
-  }, [doc]);
-  // Source pages that begin a chapter/section — each gets its own centered title
-  // page (and thus a forced column break), and is a preferred chunk boundary.
-  const chapterStarts = useMemo(() => new Set(titleForSrc.keys()), [titleForSrc]);
+  // Map each chapter/section's source page → its display title, and the set of
+  // pages that begin a chapter (each gets its own centered title page — a forced
+  // column break — and is a preferred chunk boundary).
+  const { titleForSrc, chapterStarts } = useMemo(() => deriveTitles(doc), [doc]);
   const chunks = useMemo(() => buildChunks(blocks, chapterStarts), [blocks, chapterStarts]);
   const totalWords = useMemo(() => chunks.reduce((n, c) => n + c.words, 0), [chunks]);
   const chunksRef = useRef(chunks);
