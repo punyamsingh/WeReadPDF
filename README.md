@@ -12,7 +12,7 @@
 ## Why
 
 PDFs were built for paper. Open one on a phone and you get pinch-zoom, tiny
-columns, and lines that run off the edge. WeReadPDF extracts the *text* from a
+columns, and lines that run off the edge. WeReadPDF extracts the _text_ from a
 PDF and reflows it into a real ebook — screen-sized pages you turn with a tap,
 with the typography, theme, and spacing all under your control.
 
@@ -52,15 +52,15 @@ district.
 
 ## Tech stack
 
-| Area | Choice |
-| --- | --- |
-| Framework | [TanStack Start](https://tanstack.com/start) (file-based routing, SSR) |
-| UI | React 19, [Tailwind CSS v4](https://tailwindcss.com), [shadcn/ui](https://ui.shadcn.com) (Radix) |
-| PDF parsing | [pdf.js](https://mozilla.github.io/pdf.js/) (`pdfjs-dist`) in a web worker |
-| Storage | IndexedDB (book bodies) + localStorage (settings & progress) |
-| Build / dev | [Vite](https://vitejs.dev) + [Nitro](https://nitro.build) |
-| Deploy | [Vercel](https://vercel.com) (Nitro `vercel` preset) |
-| Language | TypeScript |
+| Area        | Choice                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| Framework   | [TanStack Start](https://tanstack.com/start) (file-based routing, SSR)                           |
+| UI          | React 19, [Tailwind CSS v4](https://tailwindcss.com), [shadcn/ui](https://ui.shadcn.com) (Radix) |
+| PDF parsing | [pdf.js](https://mozilla.github.io/pdf.js/) (`pdfjs-dist`) in a web worker                       |
+| Storage     | IndexedDB (book bodies) + localStorage (settings & progress)                                     |
+| Build / dev | [Vite](https://vitejs.dev) + [Nitro](https://nitro.build)                                        |
+| Deploy      | [Vercel](https://vercel.com) (Nitro `vercel` preset)                                             |
+| Language    | TypeScript                                                                                       |
 
 ## Getting started
 
@@ -137,12 +137,12 @@ pushes a `chore(release): x.y.z` commit back to `main` as **semantic-release-bot
 
 Commit messages drive the version bump:
 
-| Commit type                       | Release      |
-| --------------------------------- | ------------ |
-| `fix: …`                          | patch (x.y.**z**) |
-| `feat: …`                         | minor (x.**y**.0) |
-| `feat!: …` / `BREAKING CHANGE:`   | major (**x**.0.0) |
-| `chore: …`, `docs: …`, `refactor: …`, etc. | no release |
+| Commit type                                | Release           |
+| ------------------------------------------ | ----------------- |
+| `fix: …`                                   | patch (x.y.**z**) |
+| `feat: …`                                  | minor (x.**y**.0) |
+| `feat!: …` / `BREAKING CHANGE:`            | major (**x**.0.0) |
+| `chore: …`, `docs: …`, `refactor: …`, etc. | no release        |
 
 **Commit linting.** A [`Commitlint`](.github/workflows/commitlint.yml) workflow
 checks every commit in a pull request against the Conventional Commits spec
@@ -160,7 +160,7 @@ violations`). To let semantic-release push the `chore(release)` commit:
 2. **Add it as a repo secret** named `GH_PAT` (Settings → Secrets and variables
    → Actions). The workflow uses `GH_PAT` and falls back to `GITHUB_TOKEN`.
 3. **Add the token's owner/app to the ruleset bypass list** (Settings → Rules →
-   the `main` ruleset → *Bypass list*), so its pushes skip the PR requirement.
+   the `main` ruleset → _Bypass list_), so its pushes skip the PR requirement.
 
 Without these, the release computes the version correctly but fails at the push
 step. (Alternative: drop `@semantic-release/git` to publish tags + GitHub

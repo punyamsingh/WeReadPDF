@@ -74,9 +74,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "WeReadPDF — May the words be ever in your favor" },
-      { name: "description", content: "Reap any PDF into clean, flowing ebook text — read in your own private arena. Local-first, distraction-free. May the words be ever in your favor." },
+      {
+        name: "description",
+        content:
+          "Reap any PDF into clean, flowing ebook text — read in your own private arena. Local-first, distraction-free. May the words be ever in your favor.",
+      },
       { property: "og:title", content: "WeReadPDF — May the words be ever in your favor" },
-      { property: "og:description", content: "Turn PDFs into a clean reading arena. Local-first. Distraction-free. No Capitol watching." },
+      {
+        property: "og:description",
+        content:
+          "Turn PDFs into a clean reading arena. Local-first. Distraction-free. No Capitol watching.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -84,7 +92,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;1,7..72,400&display=swap" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;1,7..72,400&display=swap",
+      },
     ],
   }),
   shellComponent: RootShell,

@@ -64,7 +64,9 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
             {compact ? "Add another PDF" : "Add a PDF"}
           </p>
           {!compact && (
-            <p className="text-xs text-muted-foreground">Drop a PDF or click — up to a few hundred pages</p>
+            <p className="text-xs text-muted-foreground">
+              Drop a PDF or click — up to a few hundred pages
+            </p>
           )}
         </div>
       )}

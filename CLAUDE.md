@@ -41,12 +41,12 @@ check + build. Don't invent a test runner unless asked.
 Versioning is fully automated and **driven by commit messages**, so every commit
 that reaches `main` must follow [Conventional Commits](https://www.conventionalcommits.org):
 
-| Commit type                       | Release      |
-| --------------------------------- | ------------ |
-| `fix:` / `perf:`                  | patch (x.y.**z**) |
-| `feat:`                           | minor (x.**y**.0) |
-| `feat!:` / `BREAKING CHANGE:`     | major (**x**.0.0) |
-| `chore:`, `docs:`, `ci:`, `style:`, `refactor:`, etc. | no release |
+| Commit type                                           | Release           |
+| ----------------------------------------------------- | ----------------- |
+| `fix:` / `perf:`                                      | patch (x.y.**z**) |
+| `feat:`                                               | minor (x.**y**.0) |
+| `feat!:` / `BREAKING CHANGE:`                         | major (**x**.0.0) |
+| `chore:`, `docs:`, `ci:`, `style:`, `refactor:`, etc. | no release        |
 
 A non-conventional commit silently produces **no version bump**. The
 `Commitlint` workflow (`.github/workflows/commitlint.yml`,
@@ -72,6 +72,7 @@ A non-conventional commit silently produces **no version bump**. The
 rule violations`. The workflow therefore pushes with a **`GH_PAT`** secret.
 
 For releases to land, the repo must have:
+
 1. A **`GH_PAT`** Actions secret — a token (fine-grained PAT or GitHub App) with
    `Contents: Read and write`.
 2. That token's owner/app on the **`main` ruleset → Bypass list** (mode: Always).

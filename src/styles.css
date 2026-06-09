@@ -63,7 +63,11 @@
 
   --shadow-ember: 0 0 50px -10px var(--ember-glow);
   --gradient-ember: linear-gradient(135deg, oklch(0.84 0.14 82), oklch(0.6 0.19 45));
-  --gradient-dark: radial-gradient(ellipse at top, oklch(0.13 0.018 55) 0%, oklch(0.06 0.008 45) 60%);
+  --gradient-dark: radial-gradient(
+    ellipse at top,
+    oklch(0.13 0.018 55) 0%,
+    oklch(0.06 0.008 45) 60%
+  );
 }
 
 :root {

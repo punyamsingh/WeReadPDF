@@ -1,5 +1,4 @@
 import type * as PdfJsType from "pdfjs-dist";
-// @ts-ignore - vite worker import
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 
 export interface ExtractedPage {

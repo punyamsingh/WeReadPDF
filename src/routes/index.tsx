@@ -5,7 +5,11 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "WeReadPDF — Read PDFs Like Ebooks" },
-      { name: "description", content: "Transform any PDF into a clean, distraction-free reading experience. Local-first, private, beautifully typeset." },
+      {
+        name: "description",
+        content:
+          "Transform any PDF into a clean, distraction-free reading experience. Local-first, private, beautifully typeset.",
+      },
       { property: "og:title", content: "WeReadPDF" },
       { property: "og:description", content: "May the words be ever in your favor." },
     ],
