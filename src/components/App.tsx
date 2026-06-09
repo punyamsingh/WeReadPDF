@@ -1,22 +1,21 @@
 import { useEffect, useState } from "react";
-import { Upload, Flame, BookOpen, Lock, Type, Loader2 } from "lucide-react";
 import { extractPdf } from "@/lib/pdf-extract";
-import { saveDoc, loadLastDoc, loadProgress, type CachedDoc } from "@/lib/reader-store";
+import { saveDoc, listDocs, deleteDoc, renameDoc, type CachedDoc } from "@/lib/reader-store";
+import { Library } from "./Library";
 import { Reader } from "./Reader";
 
 export function App() {
-  const [doc, setDoc] = useState<CachedDoc | null>(null);
-  const [lastDoc, setLastDoc] = useState<CachedDoc | null>(null);
+  const [docs, setDocs] = useState<CachedDoc[]>([]);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
+  // Hydrate the shelf from IndexedDB on first load.
   useEffect(() => {
-    loadLastDoc()
-      .then((cached) => {
-        if (cached) setLastDoc(cached);
-      })
+    listDocs()
+      .then(setDocs)
       .catch(() => {});
   }, []);
 
@@ -30,12 +29,11 @@ export function App() {
     setLoading(true);
     setProgress({ loaded: 0, total: 0 });
     try {
-      const extracted = await extractPdf(file, (loaded, total) =>
-        setProgress({ loaded, total }),
-      );
+      const extracted = await extractPdf(file, (loaded, total) => setProgress({ loaded, total }));
       const cached: CachedDoc = {
         key: `${file.name}-${file.size}`,
         title: extracted.title,
+        author: extracted.author,
         pages: extracted.pages,
         outline: extracted.outline,
         wordCount: extracted.wordCount,
@@ -46,10 +44,11 @@ export function App() {
       } catch (saveErr) {
         // Reading still works this session; we just couldn't persist it.
         console.error(saveErr);
-        setWarning("Couldn't save this book for later — you can still read it now.");
+        setWarning("Couldn't save this book to your shelf — you can still read it now.");
       }
-      setLastDoc(cached);
-      setDoc(cached);
+      // Upsert into the shelf (replace any existing record with the same key).
+      setDocs((prev) => [cached, ...prev.filter((d) => d.key !== cached.key)]);
+      setOpenKey(cached.key);
     } catch (e) {
       console.error(e);
       setError("Could not read this PDF. It may be encrypted or scanned.");
@@ -58,203 +57,42 @@ export function App() {
     }
   }
 
-  if (doc) {
-    return (
-      <Reader
-        doc={doc}
-        // Exiting returns to the landing screen but keeps the book stored,
-        // so the reader can be resumed from "Continue reading".
-        onExit={() => setDoc(null)}
-      />
-    );
+  async function handleRemove(key: string) {
+    try {
+      await deleteDoc(key);
+    } catch (e) {
+      console.error(e);
+    }
+    setDocs((prev) => prev.filter((d) => d.key !== key));
+    if (openKey === key) setOpenKey(null);
+  }
+
+  async function handleRename(key: string, title: string) {
+    try {
+      await renameDoc(key, title);
+    } catch (e) {
+      console.error(e);
+    }
+    setDocs((prev) => prev.map((d) => (d.key === key ? { ...d, title } : d)));
+  }
+
+  const openDoc = openKey ? (docs.find((d) => d.key === openKey) ?? null) : null;
+
+  if (openDoc) {
+    return <Reader doc={openDoc} onExit={() => setOpenKey(null)} />;
   }
 
   return (
-    <div className="min-h-screen relative overflow-hidden">
-      {/* Ember atmospherics */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[900px] h-[900px] rounded-full opacity-30 blur-3xl" style={{ background: "radial-gradient(circle, var(--ember) 0%, transparent 60%)" }} />
-        <div className="absolute bottom-0 right-0 w-[500px] h-[500px] rounded-full opacity-20 blur-3xl" style={{ background: "radial-gradient(circle, var(--accent) 0%, transparent 60%)" }} />
-      </div>
-
-      {/* Nav */}
-      <nav className="px-6 sm:px-10 py-6 flex items-center justify-between max-w-7xl mx-auto">
-        <div className="flex items-center gap-2">
-          <Flame className="w-5 h-5 text-ember animate-flicker" />
-          <span className="font-display tracking-[0.3em] text-sm uppercase">WeReadPDF</span>
-        </div>
-        <div className="hidden sm:flex items-center gap-8 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          <a href="#features" className="hover:text-ember transition">Features</a>
-          <a href="#how" className="hover:text-ember transition">How it works</a>
-          <span className="flex items-center gap-1.5"><Lock className="w-3 h-3" /> Local-only</span>
-        </div>
-      </nav>
-
-      {/* Hero */}
-      <section className="px-6 sm:px-10 pt-12 sm:pt-24 pb-20 max-w-4xl mx-auto text-center">
-        <p className="text-xs uppercase tracking-[0.4em] text-ember mb-6 animate-fade-up">
-          — A spark for the page —
-        </p>
-        <h1
-          className="font-display font-black tracking-tight text-5xl sm:text-7xl leading-[1.05] animate-fade-up"
-          style={{ animationDelay: "0.1s" }}
-        >
-          May the words be<br />
-          <span className="text-ember">ever in your favor.</span>
-        </h1>
-        <p
-          className="mt-8 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto font-serif italic animate-fade-up"
-          style={{ animationDelay: "0.2s" }}
-        >
-          PDFs were built for paper. WeReadPDF strips them to their flame —
-          clean, flowing text you can actually read on any screen.
-        </p>
-
-        {lastDoc && !loading && (
-          <div className="mt-10 animate-fade-up" style={{ animationDelay: "0.25s" }}>
-            <ContinueCard doc={lastDoc} onResume={() => setDoc(lastDoc)} />
-          </div>
-        )}
-
-        <div className="mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
-          <DropZone loading={loading} progress={progress} error={error} onFile={handleFile} />
-        </div>
-
-        {warning && (
-          <p className="mt-4 text-sm text-amber-400/80 text-center">{warning}</p>
-        )}
-
-        <p className="mt-6 text-xs text-muted-foreground/60 tracking-wide">
-          Files never leave your device. No upload. No account. No trace.
-        </p>
-      </section>
-
-      {/* Features */}
-      <section id="features" className="px-6 sm:px-10 py-20 max-w-6xl mx-auto">
-        <div className="grid sm:grid-cols-3 gap-6">
-          {FEATURES.map((f, i) => (
-            <div
-              key={i}
-              className="group p-8 rounded-lg border border-border/60 bg-card/40 backdrop-blur hover:border-ember/40 transition-all duration-500 hover:bg-card/80"
-            >
-              <f.icon className="w-5 h-5 text-ember mb-4 group-hover:animate-flicker" />
-              <h3 className="font-display uppercase tracking-[0.2em] text-sm mb-3">{f.title}</h3>
-              <p className="text-sm text-muted-foreground font-serif leading-relaxed">{f.body}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* How */}
-      <section id="how" className="px-6 sm:px-10 py-20 max-w-3xl mx-auto text-center">
-        <h2 className="font-display uppercase tracking-[0.3em] text-ember text-sm mb-6">The Reaping</h2>
-        <p className="font-serif text-2xl sm:text-3xl italic leading-relaxed text-foreground/90">
-          "Choose your tribute. We'll extract its text, light the page in ember,
-          and remember exactly where you stopped reading — even if the world goes dark."
-        </p>
-        <div className="mt-12 flex items-center justify-center gap-4 text-xs uppercase tracking-[0.25em] text-muted-foreground">
-          <span>1. Open</span>
-          <span className="text-ember">·</span>
-          <span>2. Extract</span>
-          <span className="text-ember">·</span>
-          <span>3. Read</span>
-        </div>
-      </section>
-
-      <footer className="px-6 sm:px-10 py-10 border-t border-border/40 text-center text-xs text-muted-foreground tracking-wider">
-        <span className="font-display uppercase tracking-[0.3em]">WeReadPDF</span> — kindled locally, in your browser.
-      </footer>
-    </div>
-  );
-}
-
-function ContinueCard({ doc, onResume }: { doc: CachedDoc; onResume: () => void }) {
-  const prog = loadProgress(doc.key);
-  const pct = prog ? Math.round((prog.pageNumber / Math.max(1, prog.total)) * 100) : 0;
-  return (
-    <button
-      onClick={onResume}
-      className="group mx-auto flex w-full max-w-xl items-center gap-4 rounded-lg border border-ember/30 bg-card/40 px-5 py-4 text-left backdrop-blur transition-all hover:border-ember/60 hover:bg-card/70 ember-glow"
-    >
-      <Flame className="h-5 w-5 shrink-0 text-ember group-hover:animate-flicker" />
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] uppercase tracking-[0.3em] text-ember/70">Continue reading</p>
-        <p className="truncate font-serif text-lg text-foreground">{doc.title}</p>
-      </div>
-      <span className="shrink-0 text-xs text-muted-foreground">{pct}% kindled</span>
-    </button>
-  );
-}
-
-const FEATURES = [
-  { icon: BookOpen, title: "Reader Mode", body: "Flowing text styled like a real book. Adjustable font, width, spacing, and theme." },
-  { icon: Type, title: "Typography Control", body: "Garamond serif or Inter sans. Sizes from intimate to grand. Tune it like an instrument." },
-  { icon: Lock, title: "Privacy First", body: "Every page is processed in your browser. Nothing is uploaded. Nothing is tracked." },
-];
-
-function DropZone({
-  loading,
-  progress,
-  error,
-  onFile,
-}: {
-  loading: boolean;
-  progress: { loaded: number; total: number };
-  error: string | null;
-  onFile: (f: File) => void;
-}) {
-  const [drag, setDrag] = useState(false);
-
-  return (
-    <label
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDrag(true);
-      }}
-      onDragLeave={() => setDrag(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDrag(false);
-        const f = e.dataTransfer.files[0];
-        if (f) onFile(f);
-      }}
-      className={`block max-w-xl mx-auto cursor-pointer rounded-lg border-2 border-dashed p-10 transition-all ${
-        drag ? "border-ember bg-ember/5 ember-glow" : "border-border/60 hover:border-ember/60 bg-card/30"
-      }`}
-    >
-      <input
-        type="file"
-        accept="application/pdf"
-        className="hidden"
-        disabled={loading}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
-        }}
-      />
-      {loading ? (
-        <div className="flex flex-col items-center gap-3 text-ember">
-          <Loader2 className="w-6 h-6 animate-spin" />
-          <p className="text-sm uppercase tracking-[0.25em]">
-            Kindling page {progress.loaded} {progress.total ? `of ${progress.total}` : ""}
-          </p>
-          {progress.total > 0 && (
-            <div className="w-full max-w-xs h-1 bg-border/40 rounded overflow-hidden">
-              <div
-                className="h-full bg-ember transition-all"
-                style={{ width: `${(progress.loaded / progress.total) * 100}%` }}
-              />
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-col items-center gap-3">
-          <Upload className="w-6 h-6 text-ember" />
-          <p className="font-display uppercase tracking-[0.25em] text-sm">Drop a PDF or click to choose</p>
-          <p className="text-xs text-muted-foreground">Up to a few hundred pages</p>
-        </div>
-      )}
-      {error && <p className="mt-4 text-sm text-destructive text-center">{error}</p>}
-    </label>
+    <Library
+      docs={docs}
+      loading={loading}
+      progress={progress}
+      error={error}
+      warning={warning}
+      onFile={handleFile}
+      onOpen={(doc) => setOpenKey(doc.key)}
+      onRemove={handleRemove}
+      onRename={handleRename}
+    />
   );
 }

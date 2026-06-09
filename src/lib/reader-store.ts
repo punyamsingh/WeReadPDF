@@ -49,7 +49,9 @@ export function saveProgress(docKey: string, pageNumber: number, total: number) 
   }
 }
 
-export function loadProgress(docKey: string): { pageNumber: number; total: number } | null {
+export function loadProgress(
+  docKey: string,
+): { pageNumber: number; total: number; updatedAt?: number } | null {
   try {
     const all = JSON.parse(localStorage.getItem(PROGRESS_KEY) || "{}");
     return all[docKey] || null;
@@ -61,6 +63,7 @@ export function loadProgress(docKey: string): { pageNumber: number; total: numbe
 export interface CachedDoc {
   key: string;
   title: string;
+  author?: string;
   pages: Array<{ pageNumber: number; text: string }>;
   outline: Array<{ title: string; pageNumber: number }>;
   wordCount: number;
@@ -157,6 +160,22 @@ export async function listDocs(): Promise<CachedDoc[]> {
     const store = db.transaction(DOC_STORE, "readonly").objectStore(DOC_STORE);
     const all = (await tx(store, store.getAll())) as CachedDoc[];
     return all.sort((a, b) => b.savedAt - a.savedAt);
+  } finally {
+    db.close();
+  }
+}
+
+/** Rename a stored document's title in place. */
+export async function renameDoc(key: string, title: string): Promise<void> {
+  const trimmed = title.trim();
+  if (!trimmed) return;
+  const db = await openDB();
+  try {
+    const store = db.transaction(DOC_STORE, "readwrite").objectStore(DOC_STORE);
+    const doc = (await tx(store, store.get(key))) as CachedDoc | undefined;
+    if (!doc) return;
+    doc.title = trimmed;
+    await tx(store, store.put(doc));
   } finally {
     db.close();
   }
