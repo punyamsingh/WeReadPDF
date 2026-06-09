@@ -1,0 +1,42 @@
+name: Release
+
+# Runs after a PR is merged (i.e. a push lands on main). semantic-release
+# analyses the conventional commits since the last release, computes the next
+# version, updates package.json + CHANGELOG.md, tags the commit, and pushes a
+# "chore(release): x.y.z" commit back as semantic-release-bot.
+on:
+  push:
+    branches: [main]
+
+# Required so semantic-release can push the release commit/tag and open the
+# GitHub Release using the built-in GITHUB_TOKEN.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Never run more than one release at a time.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags are required for commit analysis.
+          fetch-depth: 0
+
+      - name: Release
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          # Plugins beyond the ones bundled with semantic-release.
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
