@@ -1,15 +1,21 @@
+export type ReaderTheme = "dark" | "night" | "sepia" | "light";
+
 export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
-  contentWidth: number;
+  /** Optimal line length in characters ("measure"). Ties width to font size. */
+  measure: number;
+  /** Reading-surface brightness multiplier (0.85 = dimmer, 1.15 = brighter). */
+  brightness: number;
   fontFamily: "serif" | "sans";
-  theme: "dark" | "sepia" | "light";
+  theme: ReaderTheme;
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 19,
   lineHeight: 1.7,
-  contentWidth: 680,
+  measure: 66,
+  brightness: 1,
   fontFamily: "serif",
   theme: "dark",
 };
