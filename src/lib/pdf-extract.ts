@@ -13,6 +13,7 @@ export interface ExtractedPage {
 
 export interface ExtractedDoc {
   title: string;
+  author: string;
   pages: ExtractedPage[];
   fullText: string;
   wordCount: number;
@@ -33,7 +34,11 @@ export async function extractPdf(
     const content = await page.getTextContent();
     let lastY: number | null = null;
     let text = "";
-    for (const item of content.items as Array<{ str: string; transform: number[]; hasEOL?: boolean }>) {
+    for (const item of content.items as Array<{
+      str: string;
+      transform: number[];
+      hasEOL?: boolean;
+    }>) {
       const y = item.transform?.[5];
       if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 2) {
         text += "\n";
@@ -67,12 +72,12 @@ export async function extractPdf(
   const wordCount = fullText.split(/\s+/).filter(Boolean).length;
 
   const meta = await pdf.getMetadata().catch(() => null);
+  const info = (meta?.info ?? {}) as Record<string, unknown>;
   const metaTitle =
-    (meta?.info && typeof (meta.info as Record<string, unknown>).Title === "string"
-      ? ((meta.info as Record<string, unknown>).Title as string)
-      : "") || file.name.replace(/\.pdf$/i, "");
+    (typeof info.Title === "string" ? info.Title.trim() : "") || file.name.replace(/\.pdf$/i, "");
+  const author = typeof info.Author === "string" ? info.Author.trim() : "";
 
-  return { title: metaTitle, pages, fullText, wordCount, outline };
+  return { title: metaTitle, author, pages, fullText, wordCount, outline };
 }
 
 function cleanText(t: string): string {
