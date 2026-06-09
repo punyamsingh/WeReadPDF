@@ -41,6 +41,8 @@ interface Props {
 interface Block {
   srcPage: number;
   paras: string[];
+  /** Word count, precomputed so progress never needs to re-scan the text. */
+  words: number;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -56,34 +58,112 @@ const BASE_X = 22;
 const PAD_TOP = 72;
 const PAD_BOTTOM = 64;
 
+// The book is laid out a chunk at a time rather than all at once. A chunk is a
+// run of PDF pages large enough to be worth its own layout pass but small enough
+// that paginating it is instant. Chunks prefer to break at chapter boundaries
+// (which already start a fresh page), but never go below MIN — short chapters are
+// merged forward — and never above MAX, so a chapterless book is still cut into
+// fast, bounded pieces.
+const MIN_CHUNK_PAGES = 30;
+const MAX_CHUNK_PAGES = 60;
+
+// Fallback reading density (words per screen) used to estimate the length of
+// chunks we haven't laid out yet. Refined from real measurements as the reader
+// moves, so the estimate sharpens the further they read.
+const DEFAULT_WORDS_PER_SCREEN = 200;
+
+const countWords = (s: string) => s.match(/\S+/g)?.length ?? 0;
+
 function buildBlocks(doc: CachedDoc): Block[] {
-  return doc.pages.map((p) => ({
-    srcPage: p.pageNumber,
-    paras: p.text
+  return doc.pages.map((p) => {
+    const paras = p.text
       .split(/\n{2,}/)
       .map((s) => s.replace(/\s+/g, " ").trim())
-      .filter(Boolean),
-  }));
+      .filter(Boolean);
+    return {
+      srcPage: p.pageNumber,
+      paras,
+      words: paras.reduce((n, para) => n + countWords(para), 0),
+    };
+  });
+}
+
+interface Chunk {
+  index: number;
+  blocks: Block[];
+  /** Total words in the chunk. */
+  words: number;
+  /** Words in every chunk before this one — the base for word-based progress. */
+  wordsBefore: number;
+  /** First PDF page in the chunk; the anchor a chunk break must not break before. */
+  firstSrcPage: number;
 }
 
 /**
- * The continuous book text — every page's paragraphs in order, each preceded by
- * an invisible anchor carrying its source page number so we can map a rendered
- * position back to the PDF page (for progress, resume and TOC jumps). Shared
- * layout: the parent decides whether to lay this out in columns (paged).
+ * Slice the book into chunks for windowed layout. We only ever lay out and keep
+ * in the DOM the chunk the reader is on, so the browser never has to paginate
+ * the whole book — the cause of the open-book freeze and the settings-slider lag.
+ *
+ * A break is taken at a chapter start once the current chunk has reached MIN
+ * pages, or unconditionally at MAX pages so a book with no chapters is still
+ * carved into bounded pieces.
+ */
+function buildChunks(blocks: Block[], chapterStarts: Set<number>): Chunk[] {
+  const chunks: Chunk[] = [];
+  let cur: Block[] = [];
+
+  const flush = () => {
+    if (!cur.length) return;
+    chunks.push({
+      index: chunks.length,
+      blocks: cur,
+      words: cur.reduce((n, b) => n + b.words, 0),
+      wordsBefore: 0,
+      firstSrcPage: cur[0].srcPage,
+    });
+    cur = [];
+  };
+
+  for (const b of blocks) {
+    const atChapter = chapterStarts.has(b.srcPage);
+    if (cur.length >= MIN_CHUNK_PAGES && (atChapter || cur.length >= MAX_CHUNK_PAGES)) flush();
+    cur.push(b);
+  }
+  flush();
+
+  let acc = 0;
+  for (const c of chunks) {
+    c.wordsBefore = acc;
+    acc += c.words;
+  }
+  return chunks.length
+    ? chunks
+    : [{ index: 0, blocks: [], words: 0, wordsBefore: 0, firstSrcPage: 1 }];
+}
+
+/**
+ * One chunk's paragraphs, each preceded by an invisible anchor carrying its
+ * source page number so a rendered position maps back to the PDF page (for
+ * progress, resume and TOC jumps). The parent lays this out in screen-wide
+ * columns.
  */
 function FlowContent({
   blocks,
   settings,
   chapterStarts,
+  chunkFirstSrcPage,
+  globalFirstSrcPage,
 }: {
   blocks: Block[];
   settings: ReaderSettings;
   /** Source pages where a chapter/section begins — each forces a fresh page. */
   chapterStarts: Set<number>;
+  /** First page of this chunk; never force a column break before it. */
+  chunkFirstSrcPage: number;
+  /** First page of the whole book; its opening paragraph isn't indented. */
+  globalFirstSrcPage: number;
 }) {
   const indented = settings.paragraphStyle === "indented";
-  const firstPage = blocks[0]?.srcPage;
   return (
     <>
       {blocks.map((b) => (
@@ -95,9 +175,11 @@ function FlowContent({
               display: "block",
               height: 0,
               // A chapter starts on its own page: force a column break before its
-              // anchor (but never before the very first page of the book).
+              // anchor (but never before the chunk's own first page).
               breakBefore:
-                chapterStarts.has(b.srcPage) && b.srcPage !== firstPage ? "column" : undefined,
+                chapterStarts.has(b.srcPage) && b.srcPage !== chunkFirstSrcPage
+                  ? "column"
+                  : undefined,
             }}
           />
           {b.paras.map((para, i) => (
@@ -106,8 +188,9 @@ function FlowContent({
               style={{
                 marginTop: 0,
                 marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,
-                // First-line indent on every paragraph but the very first.
-                textIndent: indented && !(b.srcPage === firstPage && i === 0) ? "1.4em" : 0,
+                // First-line indent on every paragraph but the book's very first.
+                textIndent:
+                  indented && !(b.srcPage === globalFirstSrcPage && i === 0) ? "1.4em" : 0,
                 textAlign: settings.justify ? "justify" : "left",
                 hyphens: settings.hyphens ? "auto" : "manual",
               }}
@@ -121,16 +204,23 @@ function FlowContent({
   );
 }
 
+/** How a chunk should be entered after it lays out. */
+type Entry = "start" | "end" | "anchor";
+
 /**
  * Kindle-style page-turn reader.
  *
- * The whole book is reflowed into CSS multi-columns the width of the viewport,
- * so each column is exactly one screen ("page"). Turning a page slides the
- * column strip horizontally by one viewport width — no scrolling. Tap the left
- * or right third to turn, the center to toggle the chrome; swipe and the
- * keyboard work too. Because screen pages depend on font size and viewport, we
- * never store a screen index: we resolve everything through the source-page
- * anchors, which keeps the reading position stable across reflows.
+ * Each chunk of the book is reflowed into CSS multi-columns the width of the
+ * viewport, so a column is exactly one screen ("page"). Only the current chunk
+ * is rendered, so the browser never paginates more than ~60 pages at once.
+ * Turning within a chunk slides the column strip by one viewport width; crossing
+ * a chunk boundary swaps in the neighbouring chunk and snaps to its edge.
+ *
+ * We never store a screen index — screens depend on font size and viewport — so
+ * everything resolves through the source-page anchors, keeping the reading
+ * position stable across reflows. Total length and progress are estimated from
+ * word counts (instant, no full-book layout) and sharpen as real chunks are
+ * measured.
  */
 export const BookView = forwardRef<BookApi, Props>(function BookView(
   { doc, settings, initialSourcePage, onChange, onCenterTap },
@@ -139,33 +229,68 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
   // Source pages that begin a chapter/section (from the outline) — each one
   // starts on a fresh page via a forced column break.
-  const chapterStarts = useMemo(
-    () => new Set(doc.outline.map((o) => o.pageNumber)),
-    [doc],
-  );
+  const chapterStarts = useMemo(() => new Set(doc.outline.map((o) => o.pageNumber)), [doc]);
+  const chunks = useMemo(() => buildChunks(blocks, chapterStarts), [blocks, chapterStarts]);
+  const totalWords = useMemo(() => chunks.reduce((n, c) => n + c.words, 0), [chunks]);
+  const chunksRef = useRef(chunks);
+  chunksRef.current = chunks;
+
+  const indexForSource = useCallback((sp: number) => {
+    const cs = chunksRef.current;
+    let idx = 0;
+    for (let i = 0; i < cs.length; i++) {
+      if (cs[i].firstSrcPage <= sp) idx = i;
+      else break;
+    }
+    return idx;
+  }, []);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const [page, setPage] = useState(0); // current screen, 0-based
-  const [total, setTotal] = useState(1);
+  const [currentChunk, setCurrentChunk] = useState(() => {
+    let idx = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      if (chunks[i].firstSrcPage <= initialSourcePage) idx = i;
+      else break;
+    }
+    return idx;
+  });
+  const [localPage, setLocalPage] = useState(0); // current screen within the chunk, 0-based
+  const [localTotal, setLocalTotal] = useState(1); // screens in the current chunk
   const [stride, setStride] = useState(0); // px the strip shifts per screen (= viewport width)
 
-  const totalRef = useRef(1);
+  // Mirrors so the imperative nav callbacks read the latest values without
+  // re-binding (and without stale closures).
+  const currentChunkRef = useRef(currentChunk);
+  const localPageRef = useRef(localPage);
+  const localTotalRef = useRef(localTotal);
+  useEffect(() => void (currentChunkRef.current = currentChunk), [currentChunk]);
+  useEffect(() => void (localPageRef.current = localPage), [localPage]);
+  useEffect(() => void (localTotalRef.current = localTotal), [localTotal]);
+
+  // Per-chunk screen mapping for the CURRENT chunk: each anchor's local screen.
   const pageStartsRef = useRef<Array<{ srcPage: number; screen: number }>>([]);
-  // The source page we want to keep the reader anchored to across reflows.
+  // Measured screen counts per chunk, for sharpening the total. Cleared whenever
+  // a layout-affecting setting or the viewport changes (tracked by sigRef).
+  const measuredRef = useRef(new Map<number, number>());
+  const sigRef = useRef("");
+  // Reading density learned from the latest measured chunk; seeds the estimate
+  // for chunks not yet laid out.
+  const wpsRef = useRef(DEFAULT_WORDS_PER_SCREEN);
+
+  // The source page to keep the reader anchored to across reflows.
   const anchorRef = useRef(initialSourcePage);
-  // Forces the next move to be instant (no slide): used on first layout,
-  // re-pagination, and TOC jumps. Normal one-step turns animate.
+  // How to land after the next chunk layout (chunk switches set this; a plain
+  // reflow defaults to preserving the anchor).
+  const pendingEntryRef = useRef<Entry | null>(null);
+  // Forces the next move to be instant (no slide): first layout, re-pagination,
+  // chunk switches and TOC jumps. Normal one-step turns animate.
   const jumpRef = useRef(true);
 
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [fontsReady, setFontsReady] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-
-  useEffect(() => {
-    totalRef.current = total;
-  }, [total]);
 
   // Honor reduced-motion: no slide animation.
   useEffect(() => {
@@ -195,6 +320,15 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     return () => ro.disconnect();
   }, []);
 
+  // Open a different book: reset to its restored page.
+  useEffect(() => {
+    anchorRef.current = initialSourcePage;
+    pendingEntryRef.current = "anchor";
+    measuredRef.current.clear();
+    setCurrentChunk(indexForSource(initialSourcePage));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.key]);
+
   const screenForSource = useCallback((srcPage: number, totalScreens: number) => {
     let best = 0;
     for (const s of pageStartsRef.current) {
@@ -204,25 +338,33 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     return Math.min(Math.max(0, best), Math.max(0, totalScreens - 1));
   }, []);
 
-  const sourceForScreen = useCallback(
-    (screen: number) => {
-      let src = blocks[0]?.srcPage ?? 1;
-      for (const s of pageStartsRef.current) {
-        if (s.screen <= screen) src = s.srcPage;
-        else break;
-      }
-      return src;
-    },
-    [blocks],
-  );
+  const sourceForScreen = useCallback((screen: number) => {
+    let src =
+      pageStartsRef.current[0]?.srcPage ??
+      chunksRef.current[currentChunkRef.current]?.firstSrcPage ??
+      1;
+    for (const s of pageStartsRef.current) {
+      if (s.screen <= screen) src = s.srcPage;
+      else break;
+    }
+    return src;
+  }, []);
 
-  // Lay the book out into screen-sized columns and measure how many there are.
+  // Lay the current chunk out into screen-sized columns and measure it.
   useLayoutEffect(() => {
     const vp = viewportRef.current;
     const content = contentRef.current;
     if (!vp || !content) return;
     const W = vp.clientWidth;
     if (W <= 0) return;
+
+    // Any change to a layout-affecting setting or the viewport invalidates every
+    // chunk's cached measurement.
+    const sig = `${W}x${vp.clientHeight}|${fontsReady}|${settings.fontSize}|${settings.lineHeight}|${settings.measure}|${settings.margin}|${settings.fontFamily}|${settings.letterSpacing}|${settings.justify}|${settings.hyphens}|${settings.paragraphStyle}|${settings.paragraphSpacing}`;
+    if (sigRef.current !== sig) {
+      measuredRef.current.clear();
+      sigRef.current = sig;
+    }
 
     // Keep the line length near the chosen measure even on wide screens by
     // widening the side padding instead of stretching the text.
@@ -241,25 +383,36 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
     // With column-gap = 2·px and padding = px, the strip advances exactly one
     // viewport width per column, so scrollWidth / W is the screen count.
-    const totalScreens = Math.max(1, Math.round(content.scrollWidth / W));
+    const local = Math.max(1, Math.round(content.scrollWidth / W));
+    measuredRef.current.set(currentChunk, local);
+    const chunkWords = chunksRef.current[currentChunk]?.words ?? 0;
+    if (chunkWords > 0) wpsRef.current = Math.min(600, Math.max(60, chunkWords / local));
+
     pageStartsRef.current = Array.from(content.querySelectorAll<HTMLElement>("[data-src]")).map(
       (el) => ({
         srcPage: Number(el.dataset.src),
-        screen: Math.min(Math.floor(el.offsetLeft / W), totalScreens - 1),
+        screen: Math.min(Math.floor(el.offsetLeft / W), local - 1),
       }),
     );
 
-    totalRef.current = totalScreens;
-    setTotal(totalScreens);
+    setLocalTotal(local);
     setStride(W);
 
-    const restored = screenForSource(anchorRef.current, totalScreens);
-    jumpRef.current = true; // snap into the restored spot, don't slide
-    setPage(restored);
-    // Re-run whenever anything that affects layout changes.
+    // Resolve where to land. A chunk switch supplies an explicit entry; a plain
+    // reflow (settings/resize/first layout) preserves the anchored source page.
+    const entry = pendingEntryRef.current;
+    pendingEntryRef.current = null;
+    let landing: number;
+    if (entry === "start") landing = 0;
+    else if (entry === "end") landing = local - 1;
+    else landing = screenForSource(anchorRef.current, local);
+
+    jumpRef.current = true; // snap into the resolved spot, don't slide
+    setLocalPage(landing);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    blocks,
+    currentChunk,
+    chunks,
     size.w,
     size.h,
     fontsReady,
@@ -275,31 +428,65 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     settings.paragraphSpacing,
   ]);
 
-  // Report position (and remember the anchor) whenever the page changes.
+  // Report position (and remember the anchor) whenever the screen changes.
   useEffect(() => {
-    const sourcePage = sourceForScreen(page);
-    anchorRef.current = sourcePage;
-    const fraction = total > 0 ? (page + 1) / total : 0;
-    onChange({ sourcePage, fraction, page: page + 1, total });
-  }, [page, total, sourceForScreen, onChange]);
+    const cs = chunks;
+    if (!cs.length) return;
+    const chunk = cs[currentChunk] ?? cs[0];
+    const est = (i: number) =>
+      measuredRef.current.get(i) ?? Math.max(1, Math.round(cs[i].words / wpsRef.current));
 
-  const turn = useCallback((delta: number) => {
-    setPage((p) => Math.min(Math.max(0, p + delta), totalRef.current - 1));
+    let before = 0;
+    for (let i = 0; i < currentChunk; i++) before += est(i);
+    let total = before;
+    for (let i = currentChunk; i < cs.length; i++) total += est(i);
+
+    const page = Math.min(before + localPage + 1, total);
+    const within = localTotal > 0 ? localPage / localTotal : 0;
+    const wordsPos = chunk.wordsBefore + within * chunk.words;
+    const fraction = totalWords > 0 ? Math.min(1, Math.max(0, wordsPos / totalWords)) : 0;
+
+    const sourcePage = sourceForScreen(localPage);
+    anchorRef.current = sourcePage;
+    onChange({ sourcePage, fraction, page, total });
+  }, [currentChunk, localPage, localTotal, chunks, totalWords, sourceForScreen, onChange]);
+
+  const next = useCallback(() => {
+    if (localPageRef.current < localTotalRef.current - 1) {
+      setLocalPage((p) => Math.min(p + 1, localTotalRef.current - 1));
+    } else if (currentChunkRef.current < chunksRef.current.length - 1) {
+      pendingEntryRef.current = "start";
+      setCurrentChunk((c) => c + 1);
+    }
   }, []);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      next: () => turn(1),
-      prev: () => turn(-1),
-      goToSourcePage: (sp) => {
-        anchorRef.current = sp;
-        jumpRef.current = true; // TOC jumps snap, they don't slide page-by-page
-        setPage(screenForSource(sp, totalRef.current));
-      },
-    }),
-    [turn, screenForSource],
+  const prev = useCallback(() => {
+    if (localPageRef.current > 0) {
+      setLocalPage((p) => Math.max(0, p - 1));
+    } else if (currentChunkRef.current > 0) {
+      pendingEntryRef.current = "end";
+      setCurrentChunk((c) => c - 1);
+    }
+  }, []);
+
+  const goToSourcePage = useCallback(
+    (sp: number) => {
+      const target = indexForSource(sp);
+      anchorRef.current = sp;
+      jumpRef.current = true;
+      if (target === currentChunkRef.current) {
+        setLocalPage(screenForSource(sp, localTotalRef.current));
+      } else {
+        pendingEntryRef.current = "anchor";
+        setCurrentChunk(target);
+      }
+    },
+    [indexForSource, screenForSource],
   );
+
+  useImperativeHandle(ref, () => ({ next, prev, goToSourcePage }), [next, prev, goToSourcePage]);
+
+  const turn = useCallback((delta: number) => (delta > 0 ? next() : prev()), [next, prev]);
 
   // Tap zones + swipe, without stealing text selection.
   const gesture = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -335,7 +522,9 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
   // animates again.
   useEffect(() => {
     jumpRef.current = false;
-  }, [page]);
+  }, [localPage, currentChunk]);
+
+  const chunk = chunks[currentChunk] ?? chunks[0];
 
   return (
     <div
@@ -359,12 +548,18 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           fontSize: `${settings.fontSize}px`,
           lineHeight: settings.lineHeight,
           letterSpacing: `${settings.letterSpacing}em`,
-          transform: `translateX(${-page * stride}px)`,
+          transform: `translateX(${-localPage * stride}px)`,
           transition: instant ? "none" : "transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1)",
           willChange: "transform",
         }}
       >
-        <FlowContent blocks={blocks} settings={settings} chapterStarts={chapterStarts} />
+        <FlowContent
+          blocks={chunk?.blocks ?? []}
+          settings={settings}
+          chapterStarts={chapterStarts}
+          chunkFirstSrcPage={chunk?.firstSrcPage ?? 0}
+          globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
+        />
       </div>
     </div>
   );
