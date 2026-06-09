@@ -160,16 +160,28 @@ export function Reader({ doc, onExit }: Props) {
     // makes the page darker; for paper themes it softens a harsh white.
     const bg: [number, number, number] = [clamp(bgL * settings.brightness, 0.07, 0.99), bgC, bgH];
     const fg = palette.fg;
+    // The chrome bars get their own calm, muted slate — deliberately cooler and
+    // greyer than the reading surface (and clear of the warm ember accents) so
+    // they read as separate furniture and never compete with the page. Step the
+    // page lightness off the surface (darker on paper, lighter in the dark
+    // themes) and pull the hue to a neutral cool with almost no chroma.
+    const barL = clamp(bg[0] > 0.5 ? bg[0] - 0.08 : bg[0] + 0.07, 0.12, 0.95);
+    const bar: [number, number, number] = [barL, 0.006, 255];
+    const ink: [number, number, number] = [barL > 0.5 ? 0.3 : 0.84, 0.006, 255];
     return {
       fg,
       root: { background: oklch(bg), color: oklch(fg) },
-      // Header/footer float above the surface — tint them from the same color
-      // so the chrome matches the page in every theme.
+      // Mostly opaque so the slate actually reads as its own colour; the
+      // backdrop-blur still softens whatever scrolls beneath it.
       chrome: {
-        backgroundColor: oklch(bg, 0.72),
-        borderColor: oklch(fg, 0.12),
-        color: oklch(fg, 0.65),
-      },
+        backgroundColor: oklch(bar, 0.9),
+        borderColor: oklch(ink, 0.16),
+        color: oklch(ink, 0.8),
+        "--chrome-fg": oklch(ink, 0.8),
+        "--chrome-strong": oklch(ink, 0.98),
+        "--chrome-faint": oklch(ink, 0.5),
+        "--chrome-hover-bg": oklch(ink, 0.08),
+      } as React.CSSProperties,
     };
   }, [settings.theme, settings.brightness]);
 
@@ -189,27 +201,27 @@ export function Reader({ doc, onExit }: Props) {
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 max-w-[1400px] mx-auto w-full">
           <button
             onClick={onExit}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-ember transition-colors"
+            className="flex items-center gap-2 text-sm text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
             <span className="hidden sm:inline">Library</span>
           </button>
           <div className="flex-1 text-center min-w-0">
-            <p className="font-display text-xs uppercase tracking-[0.3em] text-ember/70 truncate">
+            <p className="font-display text-xs uppercase tracking-[0.3em] text-[color:var(--chrome-fg)] truncate">
               {doc.title}
             </p>
           </div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowToc(true)}
-              className="p-2 rounded-md hover:bg-muted/40 text-muted-foreground hover:text-ember transition-colors"
+              className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
               aria-label="Table of contents"
             >
               <List className="w-4 h-4" />
             </button>
             <button
               onClick={() => setShowSettings((s) => !s)}
-              className="p-2 rounded-md hover:bg-muted/40 text-muted-foreground hover:text-ember transition-colors"
+              className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
               aria-label="Reader settings"
             >
               <Settings className="w-4 h-4" />
@@ -274,18 +286,18 @@ export function Reader({ doc, onExit }: Props) {
           <button
             onClick={() => bookRef.current?.prev()}
             disabled={pos.page <= 1}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-ember hover:bg-muted/30 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
             <ChevronLeft className="w-4 h-4" /> Prev
           </button>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 text-xs text-[color:var(--chrome-faint)]">
             <Mockingjay className="w-4 h-4 pin-glow" />
             <span>{Math.round(progress)}% survived</span>
           </div>
           <button
             onClick={() => bookRef.current?.next()}
             disabled={pos.page >= pos.total}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-ember hover:bg-muted/30 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
           >
             Next <ChevronRight className="w-4 h-4" />
           </button>
