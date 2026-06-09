@@ -1,10 +1,6 @@
-import * as pdfjs from "pdfjs-dist";
+import type * as PdfJsType from "pdfjs-dist";
 // @ts-ignore - vite worker import
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
-
-if (typeof window !== "undefined") {
-  pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
-}
 
 export interface ExtractedPage {
   pageNumber: number;
@@ -24,6 +20,9 @@ export async function extractPdf(
   file: File,
   onProgress?: (loaded: number, total: number) => void,
 ): Promise<ExtractedDoc> {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
+
   const buf = await file.arrayBuffer();
   const loadingTask = pdfjs.getDocument({ data: buf });
   const pdf = await loadingTask.promise;
@@ -171,7 +170,7 @@ function cleanText(t: string): string {
 }
 
 async function flattenOutline(
-  pdf: pdfjs.PDFDocumentProxy,
+  pdf: PdfJsType.PDFDocumentProxy,
   items: Array<{ title: string; dest?: unknown; items?: unknown[] }>,
   depth = 0,
 ): Promise<Array<{ title: string; pageNumber: number }>> {
