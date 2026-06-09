@@ -74,6 +74,7 @@ pnpm build        # production build (.vercel/output)
 pnpm preview      # preview the production build
 pnpm lint         # eslint
 pnpm format       # prettier --write
+pnpm format:check # prettier --check (used by CI, fails on unformatted files)
 ```
 
 Then open the app, drop in a PDF, and start reading.
@@ -118,6 +119,33 @@ A short note on routing conventions lives in
 WeReadPDF is local-first by design. PDFs are parsed and stored entirely on your
 device — there is no backend that receives your files, no account system, and no
 analytics on your reading. Clearing your browser storage removes your library.
+
+## CI & releases
+
+**Quality gate (Jenkins).** [`Jenkinsfile`](Jenkinsfile) defines the "decency"
+pipeline that runs on changes: it installs dependencies with the pinned pnpm
+version and runs **lint → format check → build**. Any failing stage fails the
+build. Point a Jenkins Pipeline job at this repo to use it.
+
+**Versioning (semantic-release).** On every merge to `main`, the
+[`Release`](.github/workflows/release.yml) GitHub Actions workflow runs
+[semantic-release](https://semantic-release.gitbook.io). It reads the
+[Conventional Commits](https://www.conventionalcommits.org) since the last
+release, computes the next [SemVer](https://semver.org) version, updates
+`package.json` + `CHANGELOG.md`, tags the commit, opens a GitHub Release, and
+pushes a `chore(release): x.y.z` commit back to `main` as **semantic-release-bot**.
+
+Commit messages drive the version bump:
+
+| Commit type                       | Release      |
+| --------------------------------- | ------------ |
+| `fix: …`                          | patch (x.y.**z**) |
+| `feat: …`                         | minor (x.**y**.0) |
+| `feat!: …` / `BREAKING CHANGE:`   | major (**x**.0.0) |
+| `chore: …`, `docs: …`, `refactor: …`, etc. | no release |
+
+> **Note:** if `main` is a protected branch, allow the GitHub Actions token (or
+> grant the bot) permission to push directly so the release commit can land.
 
 ## License
 
