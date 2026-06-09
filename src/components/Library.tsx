@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Lock, BookOpen, Type, Pencil, Trash2, Check, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Lock, BookOpen, Type, Pencil, Trash2, Check, X, Download } from "lucide-react";
 import { loadProgress, type CachedDoc } from "@/lib/reader-store";
 import type { ImportProgress } from "./App";
 import { DropZone } from "./DropZone";
@@ -28,6 +28,41 @@ interface ShelfItem {
   marks: number;
 }
 
+/** Chromium's install-prompt event (not yet in lib.dom). */
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+/**
+ * "Add to Home Screen" support: stash the deferred beforeinstallprompt event
+ * and expose an explicit install action for the nav button.
+ */
+function useInstallPrompt() {
+  const [evt, setEvt] = useState<BeforeInstallPromptEvent | null>(null);
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setEvt(e as BeforeInstallPromptEvent);
+    };
+    const onInstalled = () => setEvt(null);
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+  return {
+    available: !!evt,
+    install: async () => {
+      if (!evt) return;
+      setEvt(null);
+      await evt.prompt();
+    },
+  };
+}
+
 export function Library({
   docs,
   annCounts,
@@ -40,6 +75,8 @@ export function Library({
   onRemove,
   onRename,
 }: Props) {
+  const installer = useInstallPrompt();
+
   // Build view models (progress + last-opened) and sort by most recent.
   const items = useMemo<ShelfItem[]>(() => {
     return docs
@@ -81,9 +118,19 @@ export function Library({
           <Mockingjay className="w-7 h-7 pin-glow" />
           <span className="font-serif text-xl font-semibold tracking-wide">WeReadPDF</span>
         </div>
-        <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          <Lock className="w-3 h-3" /> District-local
-        </span>
+        <div className="flex items-center gap-4">
+          {installer.available && (
+            <button
+              onClick={installer.install}
+              className="flex items-center gap-1.5 rounded-md border border-ember/40 px-3 py-1.5 text-xs uppercase tracking-[0.15em] text-ember hover:bg-ember/10 transition-colors"
+            >
+              <Download className="w-3 h-3" /> Install app
+            </button>
+          )}
+          <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <Lock className="w-3 h-3" /> District-local
+          </span>
+        </div>
       </nav>
 
       {items.length === 0 ? (
