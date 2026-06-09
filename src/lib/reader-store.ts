@@ -55,9 +55,9 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   justify: false,
   hyphens: false,
   margin: 0,
-  // Indented paragraphs by default — the classic novel look reads as warm,
-  // continuous prose instead of disconnected web blocks.
-  paragraphStyle: "indented",
+  // Spaced paragraphs by default — first-line indents are off unless the
+  // reader opts into the classic novel look.
+  paragraphStyle: "spaced",
   paragraphSpacing: 1,
   letterSpacing: 0,
 };
