@@ -47,7 +47,9 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   measure: 66,
   brightness: 1,
   fontFamily: "serif",
-  theme: "dark",
+  // Kindle-white page by default — the reading surface is paper, even though
+  // the surrounding app shell stays dark (Catching Fire at night).
+  theme: "light",
   // Left-aligned, no hyphenation by default — the previous hard-coded
   // justify+hyphens produced ugly rivers on narrow mobile columns.
   justify: false,
