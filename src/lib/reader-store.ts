@@ -16,6 +16,15 @@ export const FONT_VARS: Record<FontFamily, string> = {
  */
 export type ParagraphStyle = "indented" | "spaced";
 
+/**
+ * How the book is presented:
+ * - "paginated": Kindle-style page turns — text reflowed into viewport-sized
+ *   screens you tap/swipe through.
+ * - "scroll": one continuous, virtualized column you scroll, like a long
+ *   article. The natural default on touch devices.
+ */
+export type ReadingMode = "paginated" | "scroll";
+
 export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
@@ -37,6 +46,8 @@ export interface ReaderSettings {
   paragraphSpacing: number;
   /** Letter tracking, in em. */
   letterSpacing: number;
+  /** Page-turn ("paginated") vs continuous ("scroll") presentation. */
+  readingMode: ReadingMode;
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -60,7 +71,19 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   paragraphStyle: "spaced",
   paragraphSpacing: 1,
   letterSpacing: 0,
+  // Page-turn by default. On a first run with no saved settings, loadSettings()
+  // upgrades this to "scroll" on touch/narrow devices, where a continuous swipe
+  // feels more natural than tapping through pages.
+  readingMode: "paginated",
 };
+
+/** Continuous scroll is the friendlier default on phones; page-turn on desktop. */
+function defaultReadingMode(): ReadingMode {
+  if (typeof window === "undefined") return DEFAULT_SETTINGS.readingMode;
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches;
+  const narrow = window.innerWidth < 768;
+  return coarse || narrow ? "scroll" : "paginated";
+}
 
 const SETTINGS_KEY = "wereadpdf.settings";
 const PROGRESS_KEY = "wereadpdf.progress";
@@ -72,8 +95,12 @@ export function loadSettings(): ReaderSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    // First run: pick a presentation that fits the device.
+    if (!raw) return { ...DEFAULT_SETTINGS, readingMode: defaultReadingMode() };
+    const saved = JSON.parse(raw);
+    // Settings saved before reading modes existed get the device-fit default too.
+    const readingMode: ReadingMode = saved.readingMode ?? defaultReadingMode();
+    return { ...DEFAULT_SETTINGS, ...saved, readingMode };
   } catch {
     return DEFAULT_SETTINGS;
   }

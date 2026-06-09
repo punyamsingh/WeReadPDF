@@ -11,8 +11,10 @@ import {
   BookOpen,
   ArrowLeft,
   Search,
+  BookCopy,
+  ScrollText,
 } from "lucide-react";
-import type { CachedDoc, FontFamily, ReaderTheme } from "@/lib/reader-store";
+import type { CachedDoc, FontFamily, ReaderTheme, ReadingMode } from "@/lib/reader-store";
 import { Mockingjay } from "./Mockingjay";
 import {
   FONT_VARS,
@@ -23,6 +25,12 @@ import {
   type ReaderSettings,
 } from "@/lib/reader-store";
 import { BookView, type BookApi, type ReadingPosition } from "./BookView";
+import { ScrollView } from "./ScrollView";
+
+const READING_MODES: Array<{ id: ReadingMode; label: string; icon: typeof BookCopy }> = [
+  { id: "paginated", label: "Pages", icon: BookCopy },
+  { id: "scroll", label: "Scroll", icon: ScrollText },
+];
 
 interface Props {
   doc: CachedDoc;
@@ -237,15 +245,28 @@ export function Reader({ doc, onExit }: Props) {
         </div>
       </header>
 
-      {/* The book */}
-      <BookView
-        ref={bookRef}
-        doc={doc}
-        settings={settings}
-        initialSourcePage={restorePage}
-        onChange={handleChange}
-        onCenterTap={onCenterTap}
-      />
+      {/* The book — page-turn or continuous scroll. Switching modes remounts the
+          view, which picks up the live reading position (pos.sourcePage) so you
+          stay where you were. */}
+      {settings.readingMode === "scroll" ? (
+        <ScrollView
+          ref={bookRef}
+          doc={doc}
+          settings={settings}
+          initialSourcePage={pos.sourcePage}
+          onChange={handleChange}
+          onCenterTap={onCenterTap}
+        />
+      ) : (
+        <BookView
+          ref={bookRef}
+          doc={doc}
+          settings={settings}
+          initialSourcePage={pos.sourcePage}
+          onChange={handleChange}
+          onCenterTap={onCenterTap}
+        />
+      )}
 
       {/* First-run tap hint */}
       {showHint && (
@@ -321,6 +342,29 @@ export function Reader({ doc, onExit }: Props) {
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            <SettingGroup label="Layout">
+              <div className="grid grid-cols-2 gap-2">
+                {READING_MODES.map(({ id, label, icon: Icon }) => {
+                  const active = settings.readingMode === id;
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => setSettings({ ...settings, readingMode: id })}
+                      aria-pressed={active}
+                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
+                        active
+                          ? "border-ember text-ember ember-glow"
+                          : "border-border text-muted-foreground hover:border-ember/40"
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </SettingGroup>
 
             <SettingGroup label="Theme">
               <div className="grid grid-cols-2 gap-2">
