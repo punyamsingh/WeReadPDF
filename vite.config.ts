@@ -36,7 +36,10 @@ export default defineConfig({
         },
       },
     }),
-    nitro({ defaultPreset: "cloudflare-module" }),
+    // Target Vercel: the `vercel` preset emits a `.vercel/output` Build Output
+    // that Vercel auto-detects. Without an explicit Nitro plugin, `vite build`
+    // emits no server and every route 404s on Vercel.
+    nitro({ preset: "vercel" }),
     viteReact(),
   ],
 });
