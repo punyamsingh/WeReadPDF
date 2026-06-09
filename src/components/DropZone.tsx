@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Upload, Loader2 } from "lucide-react";
+import type { ImportProgress } from "./App";
 
 interface Props {
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   onFile: (f: File) => void;
   /** Compact variant for the Library shelf (vs. the full landing hero). */
@@ -46,8 +47,15 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
         <div className="flex flex-col items-center gap-3 text-ember">
           <Loader2 className="w-6 h-6 animate-spin" />
           <p className="text-sm uppercase tracking-[0.25em]">
-            Reaping page {progress.loaded} {progress.total ? `of ${progress.total}` : ""}
+            {progress.phase === "ocr"
+              ? `Deciphering scan ${Math.min(progress.loaded + 1, progress.total)} of ${progress.total}`
+              : `Reaping page ${progress.loaded} ${progress.total ? `of ${progress.total}` : ""}`}
           </p>
+          {progress.phase === "ocr" && (
+            <p className="text-[11px] normal-case tracking-wide text-muted-foreground">
+              No text layer found — running on-device OCR. This can take a while.
+            </p>
+          )}
           {progress.total > 0 && (
             <div className="w-full max-w-xs h-1 bg-border/40 rounded overflow-hidden">
               <div

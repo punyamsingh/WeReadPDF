@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { Lock, BookOpen, Type, Pencil, Trash2, Check, X } from "lucide-react";
 import { loadProgress, type CachedDoc } from "@/lib/reader-store";
+import type { ImportProgress } from "./App";
 import { DropZone } from "./DropZone";
 import { Mockingjay } from "./Mockingjay";
 
 interface Props {
   docs: CachedDoc[];
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
@@ -130,7 +131,7 @@ function Shelf({
   items: ShelfItem[];
   continueItem: ShelfItem | null;
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
@@ -378,7 +379,7 @@ function EmptyState({
   onFile,
 }: {
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
