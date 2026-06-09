@@ -1,6 +1,5 @@
 import * as pdfjs from "pdfjs-dist";
-// Use the bundled worker via Vite
-// @ts-expect-error - vite worker import
+// @ts-ignore - vite worker import
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
 
 if (typeof window !== "undefined") {
