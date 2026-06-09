@@ -79,13 +79,31 @@ function buildBlocks(doc: CachedDoc): Block[] {
     const paras = p.text
       .split(/\n{2,}/)
       .map((s) => s.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      // Safety net for docs cached before the extraction-time folio filter:
+      // drop a paragraph that is JUST a page number. We deliberately do NOT
+      // strip a number glued to the start of real prose here — that can't be
+      // told apart from legitimate number-initial text ("1984 was…") and would
+      // silently corrupt it; the extraction-time filter handles the glue at the
+      // source for any re-imported PDF.
+      .filter((s) => !/^\d{1,4}$/.test(s));
     return {
       srcPage: p.pageNumber,
       paras,
       words: paras.reduce((n, para) => n + countWords(para), 0),
     };
   });
+}
+
+/** Normalize an outline title for a chapter title page: de-indent and collapse
+ *  whitespace, and strip a baked-in leading folio ONLY when it equals this
+ *  entry's page number (a TOC line like "367 END OF BOOK ONE"). A genuine
+ *  number-initial title ("12 Angry Men") is left untouched. */
+function cleanTitle(raw: string, pageNumber: number): string {
+  const t = raw.replace(/\s+/g, " ").trim();
+  const m = t.match(/^(\d{1,4})\s+(?=\p{L})/u);
+  if (m && Number(m[1]) === pageNumber) return t.slice(m[0].length).trim();
+  return t;
 }
 
 interface Chunk {
@@ -144,13 +162,16 @@ function buildChunks(blocks: Block[], chapterStarts: Set<number>): Chunk[] {
 /**
  * One chunk's paragraphs, each preceded by an invisible anchor carrying its
  * source page number so a rendered position maps back to the PDF page (for
- * progress, resume and TOC jumps). The parent lays this out in screen-wide
- * columns.
+ * progress, resume and TOC jumps). A chapter with a real title gets its own
+ * centered title page instead of a bare anchor. The parent lays this out in
+ * screen-wide columns.
  */
 function FlowContent({
   blocks,
   settings,
   chapterStarts,
+  titleForSrc,
+  colContentH,
   chunkFirstSrcPage,
   globalFirstSrcPage,
 }: {
@@ -158,48 +179,122 @@ function FlowContent({
   settings: ReaderSettings;
   /** Source pages where a chapter/section begins — each forces a fresh page. */
   chapterStarts: Set<number>;
+  /** Source page → chapter title, for the centered title pages. */
+  titleForSrc: Map<number, string>;
+  /** One column's content-box height (px), for full-page title cards. */
+  colContentH: number;
   /** First page of this chunk; never force a column break before it. */
   chunkFirstSrcPage: number;
-  /** First page of the whole book; its opening paragraph isn't indented. */
+  /** First page of the whole book; gets no title card and no opening indent. */
   globalFirstSrcPage: number;
 }) {
   const indented = settings.paragraphStyle === "indented";
   return (
     <>
-      {blocks.map((b) => (
-        <Fragment key={b.srcPage}>
-          <span
-            data-src={b.srcPage}
-            aria-hidden="true"
-            style={{
-              display: "block",
-              height: 0,
-              // A chapter starts on its own page: force a column break before its
-              // anchor (but never before the chunk's own first page).
-              breakBefore:
-                chapterStarts.has(b.srcPage) && b.srcPage !== chunkFirstSrcPage
-                  ? "column"
-                  : undefined,
-            }}
-          />
-          {b.paras.map((para, i) => (
-            <p
-              key={i}
-              style={{
-                marginTop: 0,
-                marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,
-                // First-line indent on every paragraph but the book's very first.
-                textIndent:
-                  indented && !(b.srcPage === globalFirstSrcPage && i === 0) ? "1.4em" : 0,
-                textAlign: settings.justify ? "justify" : "left",
-                hyphens: settings.hyphens ? "auto" : "manual",
-              }}
-            >
-              {para}
-            </p>
-          ))}
-        </Fragment>
-      ))}
+      {blocks.map((b) => {
+        const title = titleForSrc.get(b.srcPage);
+        const isChapter = chapterStarts.has(b.srcPage);
+        // A chapter gets its own centered title page when it has a usable title,
+        // isn't the book's first page, and we've measured the column height.
+        const showCard =
+          isChapter && b.srcPage !== globalFirstSrcPage && colContentH > 0 && !!title;
+        // Break to a fresh column for a chapter — but never before the chunk's
+        // own first page (there's no preceding column, so a forced break there
+        // can spawn a phantom blank one).
+        const breakHere = isChapter && b.srcPage !== chunkFirstSrcPage;
+        return (
+          <Fragment key={b.srcPage}>
+            {showCard ? (
+              // The SOLE [data-src] anchor for this page rides the card div — the
+              // box that owns the break — so its offsetLeft is exactly the title
+              // column's left edge (a preceding span could fragment onto the
+              // previous column and mis-map the page). One anchor per srcPage.
+              <div
+                data-src={b.srcPage}
+                style={{
+                  height: `${colContentH}px`,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  textAlign: "center",
+                  overflow: "hidden",
+                  breakBefore: breakHere ? "column" : undefined,
+                  // The card already fills the column (minus a 2px epsilon), so
+                  // the body naturally starts on the next column. Only force a
+                  // break-after when there IS a body — a forced break with no
+                  // following content can spawn a phantom blank column.
+                  breakAfter: b.paras.length ? "column" : undefined,
+                  breakInside: "avoid",
+                }}
+              >
+                <div style={{ maxWidth: "84%" }}>
+                  <span
+                    style={{
+                      display: "block",
+                      width: "2.5rem",
+                      height: 2,
+                      margin: "0 auto 1.4em",
+                      background: "currentColor",
+                      opacity: 0.3,
+                    }}
+                  />
+                  <div
+                    style={{
+                      fontFamily: "var(--font-display)",
+                      fontSize: "1.9em",
+                      lineHeight: 1.25,
+                      fontWeight: 600,
+                      letterSpacing: "0.01em",
+                      textWrap: "balance",
+                    }}
+                  >
+                    {title}
+                  </div>
+                  <span
+                    style={{
+                      display: "block",
+                      width: "2.5rem",
+                      height: 2,
+                      margin: "1.4em auto 0",
+                      background: "currentColor",
+                      opacity: 0.3,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <span
+                data-src={b.srcPage}
+                aria-hidden="true"
+                style={{
+                  display: "block",
+                  height: 0,
+                  // A title-less chapter (e.g. before the column height is known)
+                  // still breaks to a fresh page.
+                  breakBefore: breakHere ? "column" : undefined,
+                }}
+              />
+            )}
+            {b.paras.map((para, i) => (
+              <p
+                key={i}
+                style={{
+                  marginTop: 0,
+                  marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,
+                  // First-line indent on every paragraph but the book's very first.
+                  textIndent:
+                    indented && !(b.srcPage === globalFirstSrcPage && i === 0) ? "1.4em" : 0,
+                  textAlign: settings.justify ? "justify" : "left",
+                  hyphens: settings.hyphens ? "auto" : "manual",
+                }}
+              >
+                {para}
+              </p>
+            ))}
+          </Fragment>
+        );
+      })}
     </>
   );
 }
@@ -227,9 +322,22 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
-  // Source pages that begin a chapter/section (from the outline) — each one
-  // starts on a fresh page via a forced column break.
-  const chapterStarts = useMemo(() => new Set(doc.outline.map((o) => o.pageNumber)), [doc]);
+  // Map each chapter/section's source page → its display title (from the
+  // outline). The first outline entry for a page wins; titles are de-indented
+  // and have any baked-in leading page number stripped ("367 END OF BOOK ONE"
+  // → "END OF BOOK ONE"). Synthetic "Page N" fallback markers get no card.
+  const titleForSrc = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const o of doc.outline) {
+      if (/^page \d+$/i.test(o.title.trim())) continue;
+      const t = cleanTitle(o.title, o.pageNumber);
+      if (t && !m.has(o.pageNumber)) m.set(o.pageNumber, t);
+    }
+    return m;
+  }, [doc]);
+  // Source pages that begin a chapter/section — each gets its own centered title
+  // page (and thus a forced column break), and is a preferred chunk boundary.
+  const chapterStarts = useMemo(() => new Set(titleForSrc.keys()), [titleForSrc]);
   const chunks = useMemo(() => buildChunks(blocks, chapterStarts), [blocks, chapterStarts]);
   const totalWords = useMemo(() => chunks.reduce((n, c) => n + c.words, 0), [chunks]);
   const chunksRef = useRef(chunks);
@@ -349,6 +457,10 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     }
     return src;
   }, []);
+
+  // One column's content-box height — the title cards fill exactly one page.
+  // The -2px epsilon keeps sub-pixel rounding from spilling a blank extra column.
+  const colContentH = Math.max(0, size.h - PAD_TOP - PAD_BOTTOM - 2);
 
   // Lay the current chunk out into screen-sized columns and measure it.
   useLayoutEffect(() => {
@@ -557,6 +669,8 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           blocks={chunk?.blocks ?? []}
           settings={settings}
           chapterStarts={chapterStarts}
+          titleForSrc={titleForSrc}
+          colContentH={colContentH}
           chunkFirstSrcPage={chunk?.firstSrcPage ?? 0}
           globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
         />
