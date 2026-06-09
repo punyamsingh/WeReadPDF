@@ -208,6 +208,23 @@ function reflowParagraphs(lines: Line[]): string {
     if (g > 0) gaps.push(g);
   }
   const lineGap = median(gaps);
+
+  // Drop a page-number "folio" BEFORE the join loop, so a footer/header number
+  // can never be glued onto the body line (the "5 the vermin..." bug). A folio
+  // is the very top-most or bottom-most line of the page AND purely numeric, so
+  // we only ever consider those two extreme lines — a number anywhere inside the
+  // text is untouched, and "Chapter 5" isn't numeric-only. This caps removal at
+  // one header + one footer and is immune to short/sparse pages.
+  if (lines.length > 2) {
+    const isFolio = (s: string) => /^\d{1,4}$/.test(s.trim());
+    const topIdx = lines.reduce((hi, l, i) => (l.y > lines[hi].y ? i : hi), 0);
+    const botIdx = lines.reduce((lo, l, i) => (l.y < lines[lo].y ? i : lo), 0);
+    const drop = new Set<number>();
+    if (isFolio(lines[topIdx].str)) drop.add(topIdx);
+    if (isFolio(lines[botIdx].str)) drop.add(botIdx);
+    if (drop.size) lines = lines.filter((_, i) => !drop.has(i));
+  }
+
   const sortedX = lines.map((l) => l.x).sort((a, b) => a - b);
   const bodyLeft = sortedX[Math.floor(sortedX.length * 0.1)];
 
