@@ -61,7 +61,7 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
         <div className="flex flex-col items-center gap-3">
           <Upload className={`text-ember ${compact ? "w-5 h-5" : "w-6 h-6"}`} />
           <p className="font-display uppercase tracking-[0.25em] text-sm text-center">
-            {compact ? "Reap another tribute" : "Offer a tribute"}
+            {compact ? "Add another PDF" : "Add a PDF"}
           </p>
           {!compact && (
             <p className="text-xs text-muted-foreground">Drop a PDF or click — up to a few hundred pages</p>

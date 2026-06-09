@@ -73,7 +73,7 @@ export function Library({
       <nav className="px-6 sm:px-10 py-6 flex items-center justify-between max-w-7xl mx-auto">
         <div className="flex items-center gap-2.5">
           <Mockingjay className="w-7 h-7 pin-glow" />
-          <span className="font-display tracking-[0.3em] text-sm uppercase">WeReadPDF</span>
+          <span className="font-serif text-xl font-semibold tracking-wide">WeReadPDF</span>
         </div>
         <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
           <Lock className="w-3 h-3" /> District-local
@@ -104,8 +104,8 @@ export function Library({
       )}
 
       <footer className="px-6 sm:px-10 py-10 border-t border-border/40 text-center text-xs text-muted-foreground tracking-wider">
-        <span className="font-display uppercase tracking-[0.3em]">WeReadPDF</span> — read in your
-        own district. May the odds be ever in your favor.
+        <span className="font-serif text-sm font-semibold tracking-wide">WeReadPDF</span> — read in
+        your own district. May the odds be ever in your favor.
       </footer>
     </div>
   );
@@ -140,9 +140,9 @@ function Shelf({
 }) {
   return (
     <section className="px-6 sm:px-10 pb-20 max-w-6xl mx-auto">
-      <p className="text-xs uppercase tracking-[0.4em] text-ember mb-2">— Your tributes —</p>
+      <p className="text-xs uppercase tracking-[0.4em] text-ember mb-2">— Read in private —</p>
       <h1 className="font-display font-black tracking-tight text-3xl sm:text-5xl mb-10">
-        The Archive of Panem
+        Your library
       </h1>
 
       {continueItem && (
@@ -191,7 +191,6 @@ function ContinueHero({ item, onResume }: { item: ShelfItem; onResume: () => voi
           <span className="shrink-0 text-xs text-ember">{item.pct}% survived</span>
         </div>
       </div>
-      <Mockingjay className="hidden h-8 w-8 shrink-0 pin-glow transition-transform group-hover:scale-110 sm:block" />
     </button>
   );
 }
@@ -405,7 +404,7 @@ function EmptyState({
           style={{ animationDelay: "0.2s" }}
         >
           PDFs were built for paper. WeReadPDF reaps them into clean, flowing text you can actually
-          read on any screen — every tribute read in your own private arena.
+          read on any screen — every PDF read in your own private arena.
         </p>
 
         <div className="mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
