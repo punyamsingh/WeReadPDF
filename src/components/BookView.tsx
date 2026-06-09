@@ -11,12 +11,24 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, deriveTitles } from "@/lib/book-content";
+import { highlightBlock } from "./highlight";
 
 /** Imperative handle the surrounding chrome (footer, keyboard, TOC) drives. */
 export interface BookApi {
   next: () => void;
   prev: () => void;
   goToSourcePage: (sourcePage: number) => void;
+}
+
+/** Live in-book search state the reader chrome feeds the views. */
+export interface SearchState {
+  /** Lowercased needle; every occurrence in the body gets a `<mark>`. */
+  term: string;
+  /** The match currently stepped to (page + per-page ordinal), if any. */
+  active: { srcPage: number; ordinal: number } | null;
+  /** Bumped on every explicit jump (result tap / next / prev) — views only
+   *  navigate on a token change, never on mere re-renders or typing. */
+  navToken: number;
 }
 
 export interface ReadingPosition {
@@ -37,6 +49,8 @@ interface Props {
   onChange: (pos: ReadingPosition) => void;
   /** Fired on a center tap — used to toggle the chrome. */
   onCenterTap: () => void;
+  /** In-book search: highlights every hit and navigates on navToken bumps. */
+  search?: SearchState;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -134,6 +148,7 @@ function FlowContent({
   colContentH,
   chunkFirstSrcPage,
   globalFirstSrcPage,
+  search,
 }: {
   blocks: Block[];
   settings: ReaderSettings;
@@ -147,6 +162,8 @@ function FlowContent({
   chunkFirstSrcPage: number;
   /** First page of the whole book; gets no title card and no opening indent. */
   globalFirstSrcPage: number;
+  /** Active in-book search to mark up in the body text. */
+  search?: SearchState;
 }) {
   const indented = settings.paragraphStyle === "indented";
   return (
@@ -154,6 +171,15 @@ function FlowContent({
       {blocks.map((b) => {
         const title = titleForSrc.get(b.srcPage);
         const isChapter = chapterStarts.has(b.srcPage);
+        // With a live search, paragraphs render with their hits marked up; the
+        // ordinal threading keeps the page's Nth mark aligned with the Nth match.
+        const paraNodes = search?.term
+          ? highlightBlock(
+              b.paras,
+              search.term,
+              search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+            )
+          : b.paras;
         // A chapter gets its own centered title page when it has a usable title,
         // isn't the book's first page, and we've measured the column height.
         const showCard =
@@ -236,7 +262,7 @@ function FlowContent({
                 }}
               />
             )}
-            {b.paras.map((para, i) => (
+            {paraNodes.map((para, i) => (
               <p
                 key={i}
                 style={{
@@ -278,7 +304,7 @@ type Entry = "start" | "end" | "anchor";
  * measured.
  */
 export const BookView = forwardRef<BookApi, Props>(function BookView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap },
+  { doc, settings, initialSourcePage, onChange, onCenterTap, search },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -546,6 +572,31 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
   useImperativeHandle(ref, () => ({ next, prev, goToSourcePage }), [next, prev, goToSourcePage]);
 
+  // An explicit search jump (result tap / next / prev) lands on the match's
+  // page; the layout pass below then narrows to the exact screen of the mark.
+  useEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    goToSourcePage(search.active.srcPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken]);
+
+  // After the chunk holding the active match is laid out, page precisely to the
+  // screen its <mark> sits on (a long source page can span several screens).
+  useLayoutEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    const vp = viewportRef.current;
+    const content = contentRef.current;
+    if (!vp || !content) return;
+    const W = vp.clientWidth;
+    if (W <= 0) return;
+    const el = content.querySelector<HTMLElement>('mark[data-search][data-active="true"]');
+    if (!el) return;
+    const screen = Math.max(0, Math.min(Math.floor(el.offsetLeft / W), localTotalRef.current - 1));
+    jumpRef.current = true;
+    setLocalPage(screen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken, currentChunk, localTotal]);
+
   const turn = useCallback((delta: number) => (delta > 0 ? next() : prev()), [next, prev]);
 
   // Tap zones + swipe, without stealing text selection.
@@ -621,6 +672,7 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           colContentH={colContentH}
           chunkFirstSrcPage={chunk?.firstSrcPage ?? 0}
           globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
+          search={search}
         />
       </div>
     </div>

@@ -4,6 +4,8 @@ import {
   List,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   X,
   Sun,
   Moon,
@@ -24,7 +26,9 @@ import {
   loadProgress,
   type ReaderSettings,
 } from "@/lib/reader-store";
-import { BookView, type BookApi, type ReadingPosition } from "./BookView";
+import { buildBlocks } from "@/lib/book-content";
+import { searchBook, MIN_QUERY, SEARCH_LIMIT } from "@/lib/book-search";
+import { BookView, type BookApi, type ReadingPosition, type SearchState } from "./BookView";
 import { ScrollView } from "./ScrollView";
 
 const READING_MODES: Array<{ id: ReadingMode; label: string; icon: typeof BookCopy }> = [
@@ -85,7 +89,14 @@ export function Reader({ doc, onExit }: Props) {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [showToc, setShowToc] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [query, setQuery] = useState("");
+  // Full-text search: live input, debounced needle, stepped-to match index, and
+  // a token that bumps on every explicit jump so the views know when to move.
+  const [searchInput, setSearchInput] = useState("");
+  const [needle, setNeedle] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [navToken, setNavToken] = useState(0);
   const [chrome, setChrome] = useState(true);
   const [showHint, setShowHint] = useState(() => {
     try {
@@ -131,6 +142,61 @@ export function Reader({ doc, onExit }: Props) {
     lastPageRef.current = pos.page;
   }, [pos.page, dismissHint]);
 
+  // ---- Full-text search ----------------------------------------------------
+
+  const blocks = useMemo(() => buildBlocks(doc), [doc]);
+
+  // Debounce typing into the needle that actually drives matching/highlighting,
+  // so a 300+ page book never re-scans on every keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setNeedle(searchInput.trim().toLowerCase());
+      setActiveIdx(0);
+    }, 250);
+    return () => clearTimeout(id);
+  }, [searchInput]);
+
+  const matches = useMemo(() => searchBook(blocks, needle), [blocks, needle]);
+  const clampedIdx = matches.length ? Math.min(activeIdx, matches.length - 1) : 0;
+
+  const searchState = useMemo<SearchState | undefined>(() => {
+    if (needle.length < MIN_QUERY) return undefined;
+    const m = matches[clampedIdx];
+    return {
+      term: needle,
+      active: m ? { srcPage: m.srcPage, ordinal: m.ordinal } : null,
+      navToken,
+    };
+  }, [needle, matches, clampedIdx, navToken]);
+
+  const goToMatch = useCallback((i: number) => {
+    setActiveIdx(i);
+    setNavToken((t) => t + 1);
+  }, []);
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      if (!matches.length) return;
+      goToMatch((clampedIdx + dir + matches.length) % matches.length);
+    },
+    [matches.length, clampedIdx, goToMatch],
+  );
+
+  const clearSearch = useCallback(() => {
+    setSearchInput("");
+    setNeedle("");
+    setActiveIdx(0);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+
+  // Whether any slide-over panel is open — Escape closes panels first, and only
+  // clears an active search when there was nothing left to close.
+  const panelOpenRef = useRef(false);
+  useEffect(() => {
+    panelOpenRef.current = showSettings || showToc || showSearch;
+  }, [showSettings, showToc, showSearch]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
@@ -141,13 +207,15 @@ export function Reader({ doc, onExit }: Props) {
         e.preventDefault();
         bookRef.current?.prev();
       } else if (e.key === "Escape") {
+        if (!panelOpenRef.current) clearSearch();
         setShowSettings(false);
         setShowToc(false);
+        setShowSearch(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [clearSearch]);
 
   const handleChange = useCallback((p: ReadingPosition) => setPos(p), []);
   const onCenterTap = useCallback(() => {
@@ -221,6 +289,13 @@ export function Reader({ doc, onExit }: Props) {
           </div>
           <div className="flex items-center gap-1">
             <button
+              onClick={() => setShowSearch(true)}
+              className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              aria-label="Search in book"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            <button
               onClick={() => setShowToc(true)}
               className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
               aria-label="Table of contents"
@@ -256,6 +331,7 @@ export function Reader({ doc, onExit }: Props) {
           initialSourcePage={pos.sourcePage}
           onChange={handleChange}
           onCenterTap={onCenterTap}
+          search={searchState}
         />
       ) : (
         <BookView
@@ -265,7 +341,46 @@ export function Reader({ doc, onExit }: Props) {
           initialSourcePage={pos.sourcePage}
           onChange={handleChange}
           onCenterTap={onCenterTap}
+          search={searchState}
         />
+      )}
+
+      {/* Floating match stepper — visible while a search is live but its panel
+          is closed, so you can hop hit-to-hit without losing the page. */}
+      {searchState && !showSearch && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center">
+          <div
+            className="pointer-events-auto flex items-center gap-0.5 rounded-full border px-1.5 py-1 text-xs backdrop-blur-xl"
+            style={surface.chrome}
+          >
+            <button
+              onClick={() => stepMatch(-1)}
+              disabled={!matches.length}
+              aria-label="Previous match"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 transition-colors"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <span className="px-1 tabular-nums text-[color:var(--chrome-fg)]" aria-live="polite">
+              {matches.length ? `${clampedIdx + 1} / ${matches.length}` : "0 matches"}
+            </span>
+            <button
+              onClick={() => stepMatch(1)}
+              disabled={!matches.length}
+              aria-label="Next match"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 transition-colors"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={clearSearch}
+              aria-label="Clear search"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* First-run tap hint */}
@@ -554,6 +669,111 @@ export function Reader({ doc, onExit }: Props) {
                       {item.title.trim()}
                     </span>
                     <span className="text-xs opacity-50 shrink-0">{item.pageNumber}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Full-text search panel */}
+      {showSearch && (
+        <div className="fixed inset-0 z-40" onClick={() => setShowSearch(false)}>
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="absolute right-0 top-0 h-full w-full sm:w-96 bg-card border-l border-border p-6 overflow-y-auto"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">Search</h3>
+              <button
+                onClick={() => setShowSearch(false)}
+                className="text-muted-foreground hover:text-foreground"
+                aria-label="Close search"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="relative mb-3">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+              <input
+                autoFocus
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && matches.length) {
+                    goToMatch(clampedIdx);
+                    setShowSearch(false);
+                  }
+                  if (e.key === "Escape") setShowSearch(false);
+                }}
+                placeholder="Search the whole book..."
+                aria-label="Search the whole book"
+                className="w-full bg-input/50 border border-border rounded-md pl-9 pr-8 py-2 text-sm focus:outline-none focus:border-ember"
+              />
+              {searchInput && (
+                <button
+                  onClick={clearSearch}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {needle.length >= MIN_QUERY && (
+              <div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
+                <span aria-live="polite">
+                  {matches.length
+                    ? `${matches.length}${matches.length >= SEARCH_LIMIT ? "+" : ""} matches`
+                    : "No matches"}
+                </span>
+                {matches.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <button
+                      onClick={() => stepMatch(-1)}
+                      aria-label="Previous match"
+                      className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="tabular-nums">
+                      {clampedIdx + 1} / {matches.length}
+                    </span>
+                    <button
+                      onClick={() => stepMatch(1)}
+                      aria-label="Next match"
+                      className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
+
+            <ul className="space-y-1">
+              {matches.map((m, i) => (
+                <li key={i}>
+                  <button
+                    onClick={() => {
+                      goToMatch(i);
+                      setShowSearch(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                      i === clampedIdx
+                        ? "bg-ember/10 text-foreground"
+                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                    }`}
+                  >
+                    <span className="block text-[11px] opacity-50 mb-0.5">Page {m.srcPage}</span>
+                    <span className="block leading-snug">
+                      {m.before}
+                      <mark data-search="true">{m.match}</mark>
+                      {m.after}
+                    </span>
                   </button>
                 </li>
               ))}

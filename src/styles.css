@@ -187,3 +187,17 @@
 @utility animate-fade-up {
   animation: fade-up 0.6s ease-out both;
 }
+
+/* In-book search highlighting. Background-only (no padding/border) so marks
+   never change text metrics — the paginated view's screens must not shift
+   when a search lights up. */
+mark[data-search] {
+  background: oklch(0.85 0.17 85 / 0.4);
+  color: inherit;
+  border-radius: 2px;
+}
+mark[data-search][data-active="true"] {
+  background: oklch(0.72 0.19 55 / 0.9);
+  color: oklch(0.99 0.005 90);
+  box-shadow: 0 0 0 2px oklch(0.72 0.19 55 / 0.45);
+}

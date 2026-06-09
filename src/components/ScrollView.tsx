@@ -11,7 +11,8 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, countWords, deriveTitles } from "@/lib/book-content";
-import type { BookApi, ReadingPosition } from "./BookView";
+import type { BookApi, ReadingPosition, SearchState } from "./BookView";
+import { highlightBlock } from "./highlight";
 
 interface Props {
   doc: CachedDoc;
@@ -21,6 +22,8 @@ interface Props {
   onChange: (pos: ReadingPosition) => void;
   /** Fired on a center tap — used to toggle the chrome. */
   onCenterTap: () => void;
+  /** In-book search: highlights every hit and navigates on navToken bumps. */
+  search?: SearchState;
 }
 
 // Horizontal breathing room (the "side margin" setting adds to it) and the
@@ -67,7 +70,7 @@ function estimateHeight(b: Block, settings: ReaderSettings, isChapter: boolean):
  * survive reflows when typography changes — the same contract as `BookView`.
  */
 export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap },
+  { doc, settings, initialSourcePage, onChange, onCenterTap, search },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -255,6 +258,25 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     [turnBy, scrollToSource, reduceMotion],
   );
 
+  // An explicit search jump centers the active <mark>; if it isn't in the DOM
+  // yet (or the page had no mark), fall back to the top of its source page.
+  useEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    const target = search.active;
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current?.querySelector<HTMLElement>(
+        'mark[data-search][data-active="true"]',
+      );
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      } else {
+        scrollToSource(target.srcPage, !reduceMotion);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken]);
+
   // Tap zones: edges page a screen, center toggles the chrome. A real scroll or
   // a text selection is never mistaken for a tap.
   const gesture = useRef<{ x: number; y: number; t: number; top: number } | null>(null);
@@ -311,6 +333,13 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
           const isChapter = chapterStarts.has(b.srcPage);
           const title = titleForSrc.get(b.srcPage);
           const showHeading = isChapter && b.srcPage !== globalFirstSrcPage && !!title;
+          const paraNodes = search?.term
+            ? highlightBlock(
+                b.paras,
+                search.term,
+                search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+              )
+            : b.paras;
           return (
             <section
               key={b.srcPage}
@@ -351,7 +380,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
                   </div>
                 </div>
               )}
-              {b.paras.map((para, i) => (
+              {paraNodes.map((para, i) => (
                 <Fragment key={i}>
                   <p
                     style={{
