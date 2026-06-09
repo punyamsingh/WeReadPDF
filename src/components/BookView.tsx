@@ -11,7 +11,11 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, deriveTitles } from "@/lib/book-content";
-import { highlightBlock } from "./highlight";
+import type { PlacedRange } from "@/lib/annotations";
+import { renderBlock } from "./highlight";
+
+/** Resolved highlight ranges: source page → paragraph index → ranges. */
+export type HighlightsByPage = Map<number, Map<number, PlacedRange[]>>;
 
 /** Imperative handle the surrounding chrome (footer, keyboard, TOC) drives. */
 export interface BookApi {
@@ -51,6 +55,10 @@ interface Props {
   onCenterTap: () => void;
   /** In-book search: highlights every hit and navigates on navToken bumps. */
   search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
+  /** Fired when a highlight mark is tapped (open its editor). */
+  onAnnotationTap?: (id: string) => void;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -149,6 +157,7 @@ function FlowContent({
   chunkFirstSrcPage,
   globalFirstSrcPage,
   search,
+  highlights,
 }: {
   blocks: Block[];
   settings: ReaderSettings;
@@ -164,6 +173,8 @@ function FlowContent({
   globalFirstSrcPage: number;
   /** Active in-book search to mark up in the body text. */
   search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
 }) {
   const indented = settings.paragraphStyle === "indented";
   return (
@@ -171,15 +182,23 @@ function FlowContent({
       {blocks.map((b) => {
         const title = titleForSrc.get(b.srcPage);
         const isChapter = chapterStarts.has(b.srcPage);
-        // With a live search, paragraphs render with their hits marked up; the
+        // Paint search hits and reader highlights into the paragraphs; the
         // ordinal threading keeps the page's Nth mark aligned with the Nth match.
-        const paraNodes = search?.term
-          ? highlightBlock(
-              b.paras,
-              search.term,
-              search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
-            )
-          : b.paras;
+        const pageRanges = highlights?.get(b.srcPage);
+        const paraNodes =
+          search?.term || pageRanges
+            ? renderBlock(
+                b.paras,
+                search?.term
+                  ? {
+                      term: search.term,
+                      activeOrdinal:
+                        search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+                    }
+                  : null,
+                pageRanges,
+              )
+            : b.paras;
         // A chapter gets its own centered title page when it has a usable title,
         // isn't the book's first page, and we've measured the column height.
         const showCard =
@@ -304,7 +323,7 @@ type Entry = "start" | "end" | "anchor";
  * measured.
  */
 export const BookView = forwardRef<BookApi, Props>(function BookView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap, search },
+  { doc, settings, initialSourcePage, onChange, onCenterTap, search, highlights, onAnnotationTap },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -621,6 +640,12 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
       return;
     }
     if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && dt < 500) {
+      // A tap on a highlight opens its editor instead of turning the page.
+      const mark = (e.target as HTMLElement).closest?.("mark[data-annotation-id]");
+      if (mark instanceof HTMLElement && mark.dataset.annotationId) {
+        onAnnotationTap?.(mark.dataset.annotationId);
+        return;
+      }
       const x = e.clientX - (rect?.left ?? 0);
       if (x < W * 0.3) turn(-1);
       else if (x > W * 0.7) turn(1);
@@ -673,6 +698,7 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           chunkFirstSrcPage={chunk?.firstSrcPage ?? 0}
           globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
           search={search}
+          highlights={highlights}
         />
       </div>
     </div>

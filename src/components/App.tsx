@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { extractPdf, type ExtractPhase } from "@/lib/pdf-extract";
 import { saveDoc, listDocs, deleteDoc, renameDoc, type CachedDoc } from "@/lib/reader-store";
+import { countAnnotationsByDoc } from "@/lib/annotations";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 
@@ -22,12 +23,23 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
+  const [annCounts, setAnnCounts] = useState<Map<string, number>>(new Map());
+
   // Hydrate the shelf from IndexedDB on first load.
   useEffect(() => {
     listDocs()
       .then(setDocs)
       .catch(() => {});
   }, []);
+
+  // Annotation counts for the shelf badges — refreshed whenever the reader
+  // closes, since marks are made while reading.
+  useEffect(() => {
+    if (openKey) return;
+    countAnnotationsByDoc()
+      .then(setAnnCounts)
+      .catch(() => {});
+  }, [openKey]);
 
   async function handleFile(file: File) {
     if (!file || file.type !== "application/pdf") {
@@ -99,6 +111,7 @@ export function App() {
   return (
     <Library
       docs={docs}
+      annCounts={annCounts}
       loading={loading}
       progress={progress}
       error={error}

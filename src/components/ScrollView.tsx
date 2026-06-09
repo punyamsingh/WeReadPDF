@@ -11,8 +11,8 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, countWords, deriveTitles } from "@/lib/book-content";
-import type { BookApi, ReadingPosition, SearchState } from "./BookView";
-import { highlightBlock } from "./highlight";
+import type { BookApi, HighlightsByPage, ReadingPosition, SearchState } from "./BookView";
+import { renderBlock } from "./highlight";
 
 interface Props {
   doc: CachedDoc;
@@ -24,6 +24,10 @@ interface Props {
   onCenterTap: () => void;
   /** In-book search: highlights every hit and navigates on navToken bumps. */
   search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
+  /** Fired when a highlight mark is tapped (open its editor). */
+  onAnnotationTap?: (id: string) => void;
 }
 
 // Horizontal breathing room (the "side margin" setting adds to it) and the
@@ -70,7 +74,7 @@ function estimateHeight(b: Block, settings: ReaderSettings, isChapter: boolean):
  * survive reflows when typography changes — the same contract as `BookView`.
  */
 export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap, search },
+  { doc, settings, initialSourcePage, onChange, onCenterTap, search, highlights, onAnnotationTap },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -297,6 +301,12 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     const moved = Math.abs(e.clientX - g.x) > 12 || Math.abs(e.clientY - g.y) > 12;
     const scrolled = Math.abs((scrollRef.current?.scrollTop ?? 0) - g.top) > 4;
     if (moved || scrolled || Date.now() - g.t > 500) return; // a drag/scroll, not a tap
+    // A tap on a highlight opens its editor instead of paging.
+    const mark = (e.target as HTMLElement).closest?.("mark[data-annotation-id]");
+    if (mark instanceof HTMLElement && mark.dataset.annotationId) {
+      onAnnotationTap?.(mark.dataset.annotationId);
+      return;
+    }
     const rect = scrollRef.current?.getBoundingClientRect();
     const W = rect?.width ?? 0;
     const x = e.clientX - (rect?.left ?? 0);
@@ -333,13 +343,21 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
           const isChapter = chapterStarts.has(b.srcPage);
           const title = titleForSrc.get(b.srcPage);
           const showHeading = isChapter && b.srcPage !== globalFirstSrcPage && !!title;
-          const paraNodes = search?.term
-            ? highlightBlock(
-                b.paras,
-                search.term,
-                search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
-              )
-            : b.paras;
+          const pageRanges = highlights?.get(b.srcPage);
+          const paraNodes =
+            search?.term || pageRanges
+              ? renderBlock(
+                  b.paras,
+                  search?.term
+                    ? {
+                        term: search.term,
+                        activeOrdinal:
+                          search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+                      }
+                    : null,
+                  pageRanges,
+                )
+              : b.paras;
           return (
             <section
               key={b.srcPage}

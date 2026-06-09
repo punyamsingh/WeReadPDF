@@ -7,6 +7,8 @@ import { Mockingjay } from "./Mockingjay";
 
 interface Props {
   docs: CachedDoc[];
+  /** Bookmark/highlight/note counts per doc key, for the shelf badges. */
+  annCounts: Map<string, number>;
   loading: boolean;
   progress: ImportProgress;
   error: string | null;
@@ -23,10 +25,12 @@ interface ShelfItem {
   pct: number;
   finished: boolean;
   lastOpened: number;
+  marks: number;
 }
 
 export function Library({
   docs,
+  annCounts,
   loading,
   progress,
   error,
@@ -49,10 +53,11 @@ export function Library({
           pct,
           finished: pct >= 100,
           lastOpened: prog?.updatedAt ?? doc.savedAt,
+          marks: annCounts.get(doc.key) ?? 0,
         };
       })
       .sort((a, b) => b.lastOpened - a.lastOpened);
-  }, [docs]);
+  }, [docs, annCounts]);
 
   const continueItem = items.find((it) => it.pct > 0 && !it.finished) ?? null;
 
@@ -249,6 +254,7 @@ function BookCard({
           )}
           <p className="mt-1 text-[11px] text-muted-foreground/70">
             {item.pages} {item.pages === 1 ? "page" : "pages"} · {relativeTime(item.lastOpened)}
+            {item.marks > 0 && ` · ${item.marks} ${item.marks === 1 ? "mark" : "marks"}`}
           </p>
         </div>
       </button>
