@@ -11,7 +11,13 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, countWords, deriveTitles } from "@/lib/book-content";
-import type { BookApi, HighlightsByPage, ReadingPosition, SearchState } from "./BookView";
+import type {
+  BookApi,
+  HighlightsByPage,
+  ReadingPosition,
+  SearchState,
+  TtsHighlight,
+} from "./BookView";
 import { renderBlock } from "./highlight";
 
 interface Props {
@@ -28,6 +34,8 @@ interface Props {
   highlights?: HighlightsByPage;
   /** Fired when a highlight mark is tapped (open its editor). */
   onAnnotationTap?: (id: string) => void;
+  /** Sentence being read aloud — highlighted and kept in view. */
+  tts?: TtsHighlight | null;
 }
 
 // Horizontal breathing room (the "side margin" setting adds to it) and the
@@ -74,7 +82,17 @@ function estimateHeight(b: Block, settings: ReaderSettings, isChapter: boolean):
  * survive reflows when typography changes — the same contract as `BookView`.
  */
 export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap, search, highlights, onAnnotationTap },
+  {
+    doc,
+    settings,
+    initialSourcePage,
+    onChange,
+    onCenterTap,
+    search,
+    highlights,
+    onAnnotationTap,
+    tts,
+  },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -281,6 +299,25 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search?.navToken]);
 
+  // Read-aloud follows the narrator: keep the spoken sentence comfortably in
+  // view, scrolling as speech advances.
+  useEffect(() => {
+    if (!tts) return;
+    const cont = scrollRef.current;
+    if (!cont) return;
+    const el = cont.querySelector<HTMLElement>("mark[data-tts]");
+    if (!el) {
+      scrollToSource(tts.srcPage, false);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const c = cont.getBoundingClientRect();
+    const margin = 96;
+    if (r.top < c.top + margin || r.bottom > c.bottom - margin) {
+      el.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+    }
+  }, [tts, scrollToSource, reduceMotion]);
+
   // Tap zones: edges page a screen, center toggles the chrome. A real scroll or
   // a text selection is never mistaken for a tap.
   const gesture = useRef<{ x: number; y: number; t: number; top: number } | null>(null);
@@ -344,8 +381,9 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
           const title = titleForSrc.get(b.srcPage);
           const showHeading = isChapter && b.srcPage !== globalFirstSrcPage && !!title;
           const pageRanges = highlights?.get(b.srcPage);
+          const blockTts = tts?.srcPage === b.srcPage ? tts : null;
           const paraNodes =
-            search?.term || pageRanges
+            search?.term || pageRanges || blockTts
               ? renderBlock(
                   b.paras,
                   search?.term
@@ -356,6 +394,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
                       }
                     : null,
                   pageRanges,
+                  blockTts,
                 )
               : b.paras;
           return (

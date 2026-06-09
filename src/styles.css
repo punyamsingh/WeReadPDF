@@ -226,3 +226,12 @@ mark[data-annotation-id][data-note="true"] {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
 }
+
+/* Read-aloud: the sentence currently being spoken. */
+mark[data-tts] {
+  background: oklch(0.72 0.18 50 / 0.2);
+  color: inherit;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}

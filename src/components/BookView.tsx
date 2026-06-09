@@ -24,6 +24,14 @@ export interface BookApi {
   goToSourcePage: (sourcePage: number) => void;
 }
 
+/** The sentence currently being read aloud, for highlighting + page-following. */
+export interface TtsHighlight {
+  srcPage: number;
+  paraIdx: number;
+  start: number;
+  end: number;
+}
+
 /** Live in-book search state the reader chrome feeds the views. */
 export interface SearchState {
   /** Lowercased needle; every occurrence in the body gets a `<mark>`. */
@@ -59,6 +67,8 @@ interface Props {
   highlights?: HighlightsByPage;
   /** Fired when a highlight mark is tapped (open its editor). */
   onAnnotationTap?: (id: string) => void;
+  /** Sentence being read aloud — highlighted and kept in view. */
+  tts?: TtsHighlight | null;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -158,6 +168,7 @@ function FlowContent({
   globalFirstSrcPage,
   search,
   highlights,
+  tts,
 }: {
   blocks: Block[];
   settings: ReaderSettings;
@@ -175,6 +186,8 @@ function FlowContent({
   search?: SearchState;
   /** Reader highlights to paint into the body text. */
   highlights?: HighlightsByPage;
+  /** Sentence being read aloud. */
+  tts?: TtsHighlight | null;
 }) {
   const indented = settings.paragraphStyle === "indented";
   return (
@@ -182,11 +195,13 @@ function FlowContent({
       {blocks.map((b) => {
         const title = titleForSrc.get(b.srcPage);
         const isChapter = chapterStarts.has(b.srcPage);
-        // Paint search hits and reader highlights into the paragraphs; the
-        // ordinal threading keeps the page's Nth mark aligned with the Nth match.
+        // Paint search hits, reader highlights and the spoken sentence into the
+        // paragraphs; the ordinal threading keeps the page's Nth mark aligned
+        // with the Nth match.
         const pageRanges = highlights?.get(b.srcPage);
+        const blockTts = tts?.srcPage === b.srcPage ? tts : null;
         const paraNodes =
-          search?.term || pageRanges
+          search?.term || pageRanges || blockTts
             ? renderBlock(
                 b.paras,
                 search?.term
@@ -197,6 +212,7 @@ function FlowContent({
                     }
                   : null,
                 pageRanges,
+                blockTts,
               )
             : b.paras;
         // A chapter gets its own centered title page when it has a usable title,
@@ -323,7 +339,17 @@ type Entry = "start" | "end" | "anchor";
  * measured.
  */
 export const BookView = forwardRef<BookApi, Props>(function BookView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap, search, highlights, onAnnotationTap },
+  {
+    doc,
+    settings,
+    initialSourcePage,
+    onChange,
+    onCenterTap,
+    search,
+    highlights,
+    onAnnotationTap,
+    tts,
+  },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -616,6 +642,27 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search?.navToken, currentChunk, localTotal]);
 
+  // Read-aloud follows the narrator: keep the screen holding the spoken
+  // sentence in view, turning pages (and crossing chunks) as speech advances.
+  useEffect(() => {
+    if (!tts) return;
+    const vp = viewportRef.current;
+    const content = contentRef.current;
+    if (!vp || !content) return;
+    const el = content.querySelector<HTMLElement>("mark[data-tts]");
+    if (!el) {
+      // The sentence lives in another chunk — jump there; the re-run after
+      // layout finds the mark and settles on the exact screen.
+      goToSourcePage(tts.srcPage);
+      return;
+    }
+    const W = vp.clientWidth;
+    if (W <= 0) return;
+    const screen = Math.max(0, Math.min(Math.floor(el.offsetLeft / W), localTotalRef.current - 1));
+    if (screen !== localPageRef.current) setLocalPage(screen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tts, currentChunk, localTotal]);
+
   const turn = useCallback((delta: number) => (delta > 0 ? next() : prev()), [next, prev]);
 
   // Tap zones + swipe, without stealing text selection.
@@ -699,6 +746,7 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
           search={search}
           highlights={highlights}
+          tts={tts}
         />
       </div>
     </div>

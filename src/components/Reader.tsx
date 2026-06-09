@@ -21,6 +21,12 @@ import {
   Pencil,
   Download,
   StickyNote,
+  Headphones,
+  Play,
+  Pause,
+  Square,
+  SkipBack,
+  SkipForward,
 } from "lucide-react";
 import type { CachedDoc, FontFamily, ReaderTheme, ReadingMode } from "@/lib/reader-store";
 import { Mockingjay } from "./Mockingjay";
@@ -46,14 +52,19 @@ import {
   type Annotation,
   type AnnotationColor,
 } from "@/lib/annotations";
+import { useTts } from "@/hooks/use-tts";
 import {
   BookView,
   type BookApi,
   type HighlightsByPage,
   type ReadingPosition,
   type SearchState,
+  type TtsHighlight,
 } from "./BookView";
 import { ScrollView } from "./ScrollView";
+
+/** Speech-rate choices for the read-aloud bar. */
+const TTS_RATES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
 const READING_MODES: Array<{ id: ReadingMode; label: string; icon: typeof BookCopy }> = [
   { id: "paginated", label: "Pages", icon: BookCopy },
@@ -451,6 +462,26 @@ export function Reader({ doc, onExit }: Props) {
     setEditingId(null);
   }, [editing, noteDraft, colorDraft, upsertAnnotation]);
 
+  // ---- Read-aloud (TTS) ------------------------------------------------------
+
+  const tts = useTts(blocks);
+  const ttsActive = tts.status !== "idle";
+
+  // The spoken sentence, as a stable object for the views to highlight/follow.
+  const ttsSentence = tts.sentence;
+  const ttsHighlight = useMemo<TtsHighlight | undefined>(() => {
+    return ttsSentence
+      ? {
+          srcPage: ttsSentence.srcPage,
+          paraIdx: ttsSentence.paraIdx,
+          start: ttsSentence.start,
+          end: ttsSentence.end,
+        }
+      : undefined;
+  }, [ttsSentence]);
+
+  // ---------------------------------------------------------------------------
+
   const exportMarks = useCallback(() => {
     const md = annotationsToMarkdown(doc.title, annotations);
     const blob = new Blob([md], { type: "text/markdown" });
@@ -577,6 +608,20 @@ export function Reader({ doc, onExit }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-1">
+            {tts.supported && (
+              <button
+                onClick={() => (ttsActive ? tts.stop() : tts.playFrom(pos.sourcePage))}
+                aria-pressed={ttsActive}
+                className={`p-2 rounded-md transition-colors hover:bg-[color:var(--chrome-hover-bg)] ${
+                  ttsActive
+                    ? "text-ember"
+                    : "text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)]"
+                }`}
+                aria-label={ttsActive ? "Stop reading aloud" : "Read aloud from here"}
+              >
+                <Headphones className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={toggleBookmark}
               aria-pressed={!!pageBookmark}
@@ -643,6 +688,7 @@ export function Reader({ doc, onExit }: Props) {
             search={searchState}
             highlights={highlightsByPage}
             onAnnotationTap={setEditingId}
+            tts={ttsHighlight}
           />
         ) : (
           <BookView
@@ -655,9 +701,92 @@ export function Reader({ doc, onExit }: Props) {
             search={searchState}
             highlights={highlightsByPage}
             onAnnotationTap={setEditingId}
+            tts={ttsHighlight}
           />
         )}
       </div>
+
+      {/* Read-aloud player bar */}
+      {ttsActive && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center px-3">
+          <div
+            role="toolbar"
+            aria-label="Read aloud controls"
+            className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-0.5 rounded-2xl border px-2 py-1.5 text-xs backdrop-blur-xl"
+            style={surface.chrome}
+          >
+            <button
+              onClick={() => tts.skip(-1)}
+              aria-label="Previous sentence"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <SkipBack className="w-4 h-4" />
+            </button>
+            {tts.status === "playing" ? (
+              <button
+                onClick={tts.pause}
+                aria-label="Pause reading"
+                className="p-2 rounded-full text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              >
+                <Pause className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={tts.resume}
+                aria-label="Resume reading"
+                className="p-2 rounded-full text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              >
+                <Play className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => tts.skip(1)}
+              aria-label="Next sentence"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <SkipForward className="w-4 h-4" />
+            </button>
+            <button
+              onClick={tts.stop}
+              aria-label="Stop reading"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <Square className="w-3.5 h-3.5" />
+            </button>
+            <span className="mx-1 h-5 w-px bg-[color:var(--chrome-faint)] opacity-40" />
+            <label className="flex items-center gap-1 text-[color:var(--chrome-fg)]">
+              <span className="sr-only">Speech rate</span>
+              <select
+                value={tts.rate}
+                onChange={(e) => tts.setRate(parseFloat(e.target.value))}
+                aria-label="Speech rate"
+                className="bg-transparent text-xs text-[color:var(--chrome-fg)] focus:outline-none cursor-pointer"
+              >
+                {TTS_RATES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}×
+                  </option>
+                ))}
+              </select>
+            </label>
+            {tts.voices.length > 0 && (
+              <select
+                value={tts.voiceURI ?? ""}
+                onChange={(e) => tts.setVoiceURI(e.target.value || null)}
+                aria-label="Voice"
+                className="max-w-[9rem] truncate bg-transparent text-xs text-[color:var(--chrome-fg)] focus:outline-none cursor-pointer"
+              >
+                <option value="">Default voice</option>
+                {tts.voices.map((v) => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} ({v.lang})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Selection toolbar — floats by the selected text; pointer-down is
           swallowed so tapping a swatch doesn't dissolve the selection first. */}
@@ -699,7 +828,11 @@ export function Reader({ doc, onExit }: Props) {
       {/* Floating match stepper — visible while a search is live but its panel
           is closed, so you can hop hit-to-hit without losing the page. */}
       {searchState && !showSearch && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center">
+        <div
+          className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center ${
+            ttsActive ? "bottom-32" : "bottom-16"
+          }`}
+        >
           <div
             className="pointer-events-auto flex items-center gap-0.5 rounded-full border px-1.5 py-1 text-xs backdrop-blur-xl"
             style={surface.chrome}
