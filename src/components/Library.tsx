@@ -252,7 +252,7 @@ function BookCard({
           {item.doc.author && !editing && (
             <p className="mt-1 truncate text-xs text-muted-foreground">by {item.doc.author}</p>
           )}
-          <p className="mt-1 text-[11px] text-muted-foreground/70">
+          <p className="mt-1 text-[11px] text-muted-foreground">
             {item.pages} {item.pages === 1 ? "page" : "pages"} · {relativeTime(item.lastOpened)}
             {item.marks > 0 && ` · ${item.marks} ${item.marks === 1 ? "mark" : "marks"}`}
           </p>
@@ -420,7 +420,7 @@ function EmptyState({
 
         {warning && <p className="mt-4 text-sm text-amber-400/80 text-center">{warning}</p>}
 
-        <p className="mt-6 text-xs text-muted-foreground/60 tracking-wide">
+        <p className="mt-6 text-xs text-muted-foreground tracking-wide">
           Files never leave your device. No upload. No account. No trace.
         </p>
       </section>

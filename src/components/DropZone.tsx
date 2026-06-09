@@ -34,7 +34,8 @@ export function DropZone({ loading, progress, error, onFile, compact = false }: 
       <input
         type="file"
         accept="application/pdf"
-        className="hidden"
+        aria-label="Add a PDF"
+        className="sr-only"
         disabled={loading}
         onChange={(e) => {
           const f = e.target.files?.[0];

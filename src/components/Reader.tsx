@@ -53,6 +53,7 @@ import {
   type AnnotationColor,
 } from "@/lib/annotations";
 import { useTts } from "@/hooks/use-tts";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 import {
   BookView,
   type BookApi,
@@ -511,8 +512,17 @@ export function Reader({ doc, onExit }: Props) {
     editingIdRef.current = editingId;
   }, [editingId]);
 
+  // Keyboard users need a way to reach the auto-hidden chrome: the first Tab
+  // press reveals it (without stealing the keystroke), then focus cycles its
+  // controls normally.
+  const chromeRef = useRef(true);
+  useEffect(() => {
+    chromeRef.current = chrome;
+  }, [chrome]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab" && !chromeRef.current) setChrome(true);
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
@@ -568,14 +578,15 @@ export function Reader({ doc, onExit }: Props) {
       fg,
       root: { background: oklch(bg), color: oklch(fg) },
       // Mostly opaque so the slate actually reads as its own colour; the
-      // backdrop-blur still softens whatever scrolls beneath it.
+      // backdrop-blur still softens whatever scrolls beneath it. Ink alphas
+      // are kept high enough that small chrome text clears WCAG AA on the bar.
       chrome: {
         backgroundColor: oklch(bar, 0.9),
         borderColor: oklch(ink, 0.16),
-        color: oklch(ink, 0.8),
-        "--chrome-fg": oklch(ink, 0.8),
+        color: oklch(ink, 0.9),
+        "--chrome-fg": oklch(ink, 0.9),
         "--chrome-strong": oklch(ink, 0.98),
-        "--chrome-faint": oklch(ink, 0.5),
+        "--chrome-faint": oklch(ink, 0.68),
         "--chrome-hover-bg": oklch(ink, 0.08),
       } as React.CSSProperties,
     };
@@ -589,6 +600,7 @@ export function Reader({ doc, onExit }: Props) {
     <div className="relative flex h-[100dvh] flex-col overflow-hidden" style={surface.root}>
       {/* Top bar — auto-hides while reading */}
       <header
+        inert={!chrome}
         className={`absolute inset-x-0 top-0 z-30 backdrop-blur-xl border-b transition-all duration-300 ${
           chrome ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0 pointer-events-none"
         }`}
@@ -597,6 +609,7 @@ export function Reader({ doc, onExit }: Props) {
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 max-w-[1400px] mx-auto w-full">
           <button
             onClick={onExit}
+            aria-label="Back to library"
             className="flex items-center gap-2 text-sm text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -665,7 +678,14 @@ export function Reader({ doc, onExit }: Props) {
           </div>
         </div>
         {/* Progress sliver */}
-        <div className="h-[2px] bg-border/30">
+        <div
+          className="h-[2px] bg-border/30"
+          role="progressbar"
+          aria-label="Reading progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
+        >
           <div
             className="h-full bg-gradient-to-r from-ember to-accent transition-all duration-500"
             style={{ width: `${progress}%`, boxShadow: "0 0 12px var(--ember-glow)" }}
@@ -871,7 +891,7 @@ export function Reader({ doc, onExit }: Props) {
       {showHint && (
         <div
           className="pointer-events-none absolute inset-0 z-20 flex items-center justify-between px-8 text-[11px] uppercase tracking-[0.25em]"
-          style={{ color: oklch(surface.fg, 0.45) }}
+          style={{ color: oklch(surface.fg, 0.62) }}
         >
           <span>‹ prev</span>
           <span className="text-center leading-relaxed">
@@ -887,7 +907,7 @@ export function Reader({ doc, onExit }: Props) {
       {!chrome && (
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-2.5 text-[11px] tracking-wide"
-          style={{ color: oklch(surface.fg, 0.5) }}
+          style={{ color: oklch(surface.fg, 0.72) }}
         >
           <span>
             {pos.page} / {pos.total} · {Math.round(progress)}% · {minutesLeft} min left
@@ -897,6 +917,7 @@ export function Reader({ doc, onExit }: Props) {
 
       {/* Footer nav — auto-hides while reading */}
       <footer
+        inert={!chrome}
         className={`absolute inset-x-0 bottom-0 z-30 backdrop-blur-xl border-t transition-all duration-300 ${
           chrome ? "translate-y-0 opacity-100" : "translate-y-full opacity-0 pointer-events-none"
         }`}
@@ -926,521 +947,560 @@ export function Reader({ doc, onExit }: Props) {
 
       {/* Settings panel */}
       {showSettings && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowSettings(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-0 h-full w-full sm:w-96 bg-card border-l border-border p-6 overflow-y-auto ember-glow"
-          >
-            <div className="flex items-center justify-between mb-8">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">Reader</h3>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <SettingGroup label="Layout">
-              <div className="grid grid-cols-2 gap-2">
-                {READING_MODES.map(({ id, label, icon: Icon }) => {
-                  const active = settings.readingMode === id;
-                  return (
-                    <button
-                      key={id}
-                      onClick={() => setSettings({ ...settings, readingMode: id })}
-                      aria-pressed={active}
-                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
-                        active
-                          ? "border-ember text-ember ember-glow"
-                          : "border-border text-muted-foreground hover:border-ember/40"
-                      }`}
-                    >
-                      <Icon className="w-3.5 h-3.5 shrink-0" />
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingGroup>
-
-            <SettingGroup label="Theme">
-              <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(THEMES) as ReaderTheme[]).map((t) => {
-                  const { label, icon: Icon, bg, fg } = THEMES[t];
-                  const active = settings.theme === t;
-                  return (
-                    <button
-                      key={t}
-                      onClick={() => setSettings({ ...settings, theme: t })}
-                      className={`flex items-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
-                        active
-                          ? "border-ember text-ember ember-glow"
-                          : "border-border text-muted-foreground hover:border-ember/40"
-                      }`}
-                    >
-                      <span
-                        className="grid place-items-center w-6 h-6 rounded-full shrink-0 border border-black/10"
-                        style={{ background: oklch(bg), color: oklch(fg) }}
-                      >
-                        <Icon className="w-3 h-3" />
-                      </span>
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingGroup>
-
-            <SettingGroup label="Font">
-              <div className="grid grid-cols-2 gap-2">
-                {FONT_OPTIONS.map((f) => (
+        <SlideOver
+          title="Reader"
+          side="right"
+          className="ember-glow"
+          onClose={() => setShowSettings(false)}
+        >
+          <SettingGroup label="Layout">
+            <div className="grid grid-cols-2 gap-2">
+              {READING_MODES.map(({ id, label, icon: Icon }) => {
+                const active = settings.readingMode === id;
+                return (
                   <button
-                    key={f.id}
-                    onClick={() => setSettings({ ...settings, fontFamily: f.id })}
-                    className={`py-3 rounded-md border text-sm transition-all ${
-                      settings.fontFamily === f.id
-                        ? "border-ember text-ember"
+                    key={id}
+                    onClick={() => setSettings({ ...settings, readingMode: id })}
+                    aria-pressed={active}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
+                      active
+                        ? "border-ember text-ember ember-glow"
                         : "border-border text-muted-foreground hover:border-ember/40"
                     }`}
-                    style={{ fontFamily: FONT_VARS[f.id] }}
                   >
-                    {f.label}
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    {label}
                   </button>
-                ))}
-              </div>
-            </SettingGroup>
+                );
+              })}
+            </div>
+          </SettingGroup>
 
+          <SettingGroup label="Theme">
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(THEMES) as ReaderTheme[]).map((t) => {
+                const { label, icon: Icon, bg, fg } = THEMES[t];
+                const active = settings.theme === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setSettings({ ...settings, theme: t })}
+                    aria-pressed={active}
+                    className={`flex items-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
+                      active
+                        ? "border-ember text-ember ember-glow"
+                        : "border-border text-muted-foreground hover:border-ember/40"
+                    }`}
+                  >
+                    <span
+                      className="grid place-items-center w-6 h-6 rounded-full shrink-0 border border-black/10"
+                      style={{ background: oklch(bg), color: oklch(fg) }}
+                    >
+                      <Icon className="w-3 h-3" />
+                    </span>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingGroup>
+
+          <SettingGroup label="Font">
+            <div className="grid grid-cols-2 gap-2">
+              {FONT_OPTIONS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setSettings({ ...settings, fontFamily: f.id })}
+                  aria-pressed={settings.fontFamily === f.id}
+                  className={`py-3 rounded-md border text-sm transition-all ${
+                    settings.fontFamily === f.id
+                      ? "border-ember text-ember"
+                      : "border-border text-muted-foreground hover:border-ember/40"
+                  }`}
+                  style={{ fontFamily: FONT_VARS[f.id] }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </SettingGroup>
+
+          <SettingSlider
+            label="Font size"
+            value={settings.fontSize}
+            min={14}
+            max={28}
+            step={1}
+            suffix="px"
+            onChange={(v) => setSettings({ ...settings, fontSize: v })}
+          />
+          <SettingSlider
+            label="Line height"
+            value={settings.lineHeight}
+            min={1.3}
+            max={2.2}
+            step={0.05}
+            onChange={(v) => setSettings({ ...settings, lineHeight: v })}
+          />
+          <SettingSlider
+            label="Line width"
+            value={settings.measure}
+            min={45}
+            max={90}
+            step={1}
+            suffix=" char"
+            onChange={(v) => setSettings({ ...settings, measure: v })}
+          />
+          <SettingSlider
+            label="Brightness"
+            value={settings.brightness}
+            min={0.85}
+            max={1.15}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => setSettings({ ...settings, brightness: v })}
+          />
+          <SettingSlider
+            label="Side margin"
+            value={settings.margin}
+            min={0}
+            max={80}
+            step={4}
+            suffix="px"
+            onChange={(v) => setSettings({ ...settings, margin: v })}
+          />
+          {settings.paragraphStyle === "spaced" && (
             <SettingSlider
-              label="Font size"
-              value={settings.fontSize}
-              min={14}
-              max={28}
-              step={1}
-              suffix="px"
-              onChange={(v) => setSettings({ ...settings, fontSize: v })}
-            />
-            <SettingSlider
-              label="Line height"
-              value={settings.lineHeight}
-              min={1.3}
-              max={2.2}
-              step={0.05}
-              onChange={(v) => setSettings({ ...settings, lineHeight: v })}
-            />
-            <SettingSlider
-              label="Line width"
-              value={settings.measure}
-              min={45}
-              max={90}
-              step={1}
-              suffix=" char"
-              onChange={(v) => setSettings({ ...settings, measure: v })}
-            />
-            <SettingSlider
-              label="Brightness"
-              value={settings.brightness}
-              min={0.85}
-              max={1.15}
-              step={0.01}
-              format={(v) => `${Math.round(v * 100)}%`}
-              onChange={(v) => setSettings({ ...settings, brightness: v })}
-            />
-            <SettingSlider
-              label="Side margin"
-              value={settings.margin}
-              min={0}
-              max={80}
-              step={4}
-              suffix="px"
-              onChange={(v) => setSettings({ ...settings, margin: v })}
-            />
-            {settings.paragraphStyle === "spaced" && (
-              <SettingSlider
-                label="Paragraph spacing"
-                value={settings.paragraphSpacing}
-                min={0.4}
-                max={2.5}
-                step={0.1}
-                suffix="em"
-                onChange={(v) => setSettings({ ...settings, paragraphSpacing: v })}
-              />
-            )}
-            <SettingSlider
-              label="Letter spacing"
-              value={settings.letterSpacing}
-              min={-0.02}
-              max={0.12}
-              step={0.01}
+              label="Paragraph spacing"
+              value={settings.paragraphSpacing}
+              min={0.4}
+              max={2.5}
+              step={0.1}
               suffix="em"
-              onChange={(v) => setSettings({ ...settings, letterSpacing: v })}
+              onChange={(v) => setSettings({ ...settings, paragraphSpacing: v })}
             />
+          )}
+          <SettingSlider
+            label="Letter spacing"
+            value={settings.letterSpacing}
+            min={-0.02}
+            max={0.12}
+            step={0.01}
+            suffix="em"
+            onChange={(v) => setSettings({ ...settings, letterSpacing: v })}
+          />
 
-            <SettingGroup label="Text">
-              <div className="space-y-2">
-                <SettingToggle
-                  label="Indent paragraphs"
-                  checked={settings.paragraphStyle === "indented"}
-                  onChange={(v) =>
-                    setSettings({ ...settings, paragraphStyle: v ? "indented" : "spaced" })
-                  }
-                />
-                <SettingToggle
-                  label="Justify text"
-                  checked={settings.justify}
-                  onChange={(v) => setSettings({ ...settings, justify: v })}
-                />
-                <SettingToggle
-                  label="Hyphenation"
-                  checked={settings.hyphens}
-                  onChange={(v) => setSettings({ ...settings, hyphens: v })}
-                />
-              </div>
-            </SettingGroup>
-          </div>
-        </div>
+          <SettingGroup label="Text">
+            <div className="space-y-2">
+              <SettingToggle
+                label="Indent paragraphs"
+                checked={settings.paragraphStyle === "indented"}
+                onChange={(v) =>
+                  setSettings({ ...settings, paragraphStyle: v ? "indented" : "spaced" })
+                }
+              />
+              <SettingToggle
+                label="Justify text"
+                checked={settings.justify}
+                onChange={(v) => setSettings({ ...settings, justify: v })}
+              />
+              <SettingToggle
+                label="Hyphenation"
+                checked={settings.hyphens}
+                onChange={(v) => setSettings({ ...settings, hyphens: v })}
+              />
+            </div>
+          </SettingGroup>
+        </SlideOver>
       )}
 
       {/* TOC panel */}
       {showToc && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowToc(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute left-0 top-0 h-full w-full sm:w-96 bg-card border-r border-border p-6 overflow-y-auto"
-          >
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">
-                Contents
-              </h3>
-              <button
-                onClick={() => setShowToc(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search sections..."
-                className="w-full bg-input/50 border border-border rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-ember"
-              />
-            </div>
-            <ul className="space-y-1">
-              {filteredOutline.map((item, i) => (
-                <li key={i}>
-                  <button
-                    onClick={() => {
-                      bookRef.current?.goToSourcePage(item.pageNumber);
-                      setShowToc(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
-                      pos.sourcePage === item.pageNumber
-                        ? "bg-ember/10 text-ember"
-                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                    }`}
-                  >
-                    <span
-                      className="truncate"
-                      style={{
-                        paddingLeft: `${(item.title.match(/^\s*/)?.[0].length || 0) * 4}px`,
-                      }}
-                    >
-                      {item.title.trim()}
-                    </span>
-                    <span className="text-xs opacity-50 shrink-0">{item.pageNumber}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+        <SlideOver title="Contents" side="left" onClose={() => setShowToc(false)}>
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search sections..."
+              className="w-full bg-input/50 border border-border rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-ember"
+            />
           </div>
-        </div>
+          <ul className="space-y-1">
+            {filteredOutline.map((item, i) => (
+              <li key={i}>
+                <button
+                  onClick={() => {
+                    bookRef.current?.goToSourcePage(item.pageNumber);
+                    setShowToc(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
+                    pos.sourcePage === item.pageNumber
+                      ? "bg-ember/10 text-ember"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  <span
+                    className="truncate"
+                    style={{
+                      paddingLeft: `${(item.title.match(/^\s*/)?.[0].length || 0) * 4}px`,
+                    }}
+                  >
+                    {item.title.trim()}
+                  </span>
+                  <span className="text-xs opacity-70 shrink-0">{item.pageNumber}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SlideOver>
       )}
 
       {/* Full-text search panel */}
       {showSearch && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowSearch(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-0 h-full w-full sm:w-96 bg-card border-l border-border p-6 overflow-y-auto"
-          >
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">Search</h3>
+        <SlideOver title="Search" side="right" onClose={() => setShowSearch(false)}>
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              data-autofocus
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && matches.length) {
+                  goToMatch(clampedIdx);
+                  setShowSearch(false);
+                }
+              }}
+              placeholder="Search the whole book..."
+              aria-label="Search the whole book"
+              className="w-full bg-input/50 border border-border rounded-md pl-9 pr-8 py-2 text-sm focus:outline-none focus:border-ember"
+            />
+            {searchInput && (
               <button
-                onClick={() => setShowSearch(false)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Close search"
+                onClick={clearSearch}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5" />
               </button>
-            </div>
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <input
-                autoFocus
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && matches.length) {
-                    goToMatch(clampedIdx);
-                    setShowSearch(false);
-                  }
-                  if (e.key === "Escape") setShowSearch(false);
-                }}
-                placeholder="Search the whole book..."
-                aria-label="Search the whole book"
-                className="w-full bg-input/50 border border-border rounded-md pl-9 pr-8 py-2 text-sm focus:outline-none focus:border-ember"
-              />
-              {searchInput && (
-                <button
-                  onClick={clearSearch}
-                  aria-label="Clear search"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+            )}
+          </div>
+
+          {needle.length >= MIN_QUERY && (
+            <div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
+              <span aria-live="polite">
+                {matches.length
+                  ? `${matches.length}${matches.length >= SEARCH_LIMIT ? "+" : ""} matches`
+                  : "No matches"}
+              </span>
+              {matches.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <button
+                    onClick={() => stepMatch(-1)}
+                    aria-label="Previous match"
+                    className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="tabular-nums">
+                    {clampedIdx + 1} / {matches.length}
+                  </span>
+                  <button
+                    onClick={() => stepMatch(1)}
+                    aria-label="Next match"
+                    className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </span>
               )}
             </div>
+          )}
 
-            {needle.length >= MIN_QUERY && (
-              <div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
-                <span aria-live="polite">
-                  {matches.length
-                    ? `${matches.length}${matches.length >= SEARCH_LIMIT ? "+" : ""} matches`
-                    : "No matches"}
-                </span>
-                {matches.length > 0 && (
-                  <span className="flex items-center gap-1">
-                    <button
-                      onClick={() => stepMatch(-1)}
-                      aria-label="Previous match"
-                      className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
-                    >
-                      <ChevronUp className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="tabular-nums">
-                      {clampedIdx + 1} / {matches.length}
-                    </span>
-                    <button
-                      onClick={() => stepMatch(1)}
-                      aria-label="Next match"
-                      className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
-                    >
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    </button>
+          <ul className="space-y-1">
+            {matches.map((m, i) => (
+              <li key={i}>
+                <button
+                  onClick={() => {
+                    goToMatch(i);
+                    setShowSearch(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                    i === clampedIdx
+                      ? "bg-ember/10 text-foreground"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  <span className="block text-[11px] opacity-70 mb-0.5">Page {m.srcPage}</span>
+                  <span className="block leading-snug">
+                    {m.before}
+                    <mark data-search="true">{m.match}</mark>
+                    {m.after}
                   </span>
-                )}
-              </div>
-            )}
-
-            <ul className="space-y-1">
-              {matches.map((m, i) => (
-                <li key={i}>
-                  <button
-                    onClick={() => {
-                      goToMatch(i);
-                      setShowSearch(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
-                      i === clampedIdx
-                        ? "bg-ember/10 text-foreground"
-                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                    }`}
-                  >
-                    <span className="block text-[11px] opacity-50 mb-0.5">Page {m.srcPage}</span>
-                    <span className="block leading-snug">
-                      {m.before}
-                      <mark data-search="true">{m.match}</mark>
-                      {m.after}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SlideOver>
       )}
 
       {/* Marks panel — bookmarks, highlights, notes */}
       {showMarks && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowMarks(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-0 h-full w-full sm:w-96 bg-card border-l border-border p-6 overflow-y-auto"
-          >
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">Marks</h3>
-              <div className="flex items-center gap-1">
-                {annotations.length > 0 && (
-                  <button
-                    onClick={exportMarks}
-                    className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                    aria-label="Export annotations as Markdown"
-                    title="Export as Markdown"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowMarks(false)}
-                  className="p-2 rounded-md text-muted-foreground hover:text-foreground"
-                  aria-label="Close marks"
+        <SlideOver
+          title="Marks"
+          side="right"
+          onClose={() => setShowMarks(false)}
+          headerExtra={
+            annotations.length > 0 ? (
+              <button
+                onClick={exportMarks}
+                className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                aria-label="Export annotations as Markdown"
+                title="Export as Markdown"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            ) : undefined
+          }
+        >
+          {annotations.length === 0 ? (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Nothing marked yet. Tap the bookmark icon to mark a page, or select text to highlight
+              it and attach a note.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {annotations.map((a) => (
+                <li
+                  key={a.id}
+                  className="group rounded-md border border-border/60 hover:border-ember/40 transition-colors"
                 >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {annotations.length === 0 ? (
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                Nothing marked yet. Tap the bookmark icon to mark a page, or select text to
-                highlight it and attach a note.
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {annotations.map((a) => (
-                  <li
-                    key={a.id}
-                    className="group rounded-md border border-border/60 hover:border-ember/40 transition-colors"
+                  <button
+                    onClick={() => {
+                      bookRef.current?.goToSourcePage(a.srcPage);
+                      setShowMarks(false);
+                    }}
+                    className="w-full text-left px-3 pt-2.5 pb-1"
                   >
-                    <button
-                      onClick={() => {
-                        bookRef.current?.goToSourcePage(a.srcPage);
-                        setShowMarks(false);
-                      }}
-                      className="w-full text-left px-3 pt-2.5 pb-1"
-                    >
-                      <span className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-                        {a.kind === "bookmark" ? (
-                          <Bookmark className="w-3 h-3 text-ember" fill="currentColor" />
-                        ) : (
-                          <span
-                            className="h-3 w-3 rounded-full border border-black/20"
-                            style={{ background: COLOR_SWATCH[a.color ?? "gold"] }}
-                          />
-                        )}
-                        {a.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {a.srcPage}
-                      </span>
-                      <span className="block text-sm leading-snug line-clamp-2">
-                        {a.text || "(page bookmark)"}
-                      </span>
-                      {a.note && (
-                        <span className="mt-1 block text-xs italic text-muted-foreground line-clamp-2">
-                          {a.note}
-                        </span>
+                    <span className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                      {a.kind === "bookmark" ? (
+                        <Bookmark className="w-3 h-3 text-ember" fill="currentColor" />
+                      ) : (
+                        <span
+                          className="h-3 w-3 rounded-full border border-black/20"
+                          style={{ background: COLOR_SWATCH[a.color ?? "gold"] }}
+                        />
                       )}
+                      {a.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {a.srcPage}
+                    </span>
+                    <span className="block text-sm leading-snug line-clamp-2">
+                      {a.text || "(page bookmark)"}
+                    </span>
+                    {a.note && (
+                      <span className="mt-1 block text-xs italic text-muted-foreground line-clamp-2">
+                        {a.note}
+                      </span>
+                    )}
+                  </button>
+                  <div className="flex justify-end gap-1 px-2 pb-1.5">
+                    <button
+                      onClick={() => setEditingId(a.id)}
+                      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                      aria-label={a.note ? "Edit note" : "Add note"}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
                     </button>
-                    <div className="flex justify-end gap-1 px-2 pb-1.5">
-                      <button
-                        onClick={() => setEditingId(a.id)}
-                        className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-                        aria-label={a.note ? "Edit note" : "Add note"}
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => removeAnnotation(a.id)}
-                        className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-muted/40 transition-colors"
-                        aria-label="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+                    <button
+                      onClick={() => removeAnnotation(a.id)}
+                      className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-muted/40 transition-colors"
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SlideOver>
       )}
 
       {/* Annotation editor — note + color + delete */}
       {editing && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          onClick={() => setEditingId(null)}
+        <ModalDialog
+          label={`Edit ${editing.kind} on page ${editing.srcPage}`}
+          onClose={() => setEditingId(null)}
         >
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-md rounded-lg border border-border bg-card p-5 ember-glow"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-display text-sm uppercase tracking-[0.2em] text-ember">
-                {editing.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {editing.srcPage}
-              </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-display text-sm uppercase tracking-[0.2em] text-ember">
+              {editing.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {editing.srcPage}
+            </h3>
+            <button
+              onClick={() => setEditingId(null)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Close editor"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {editing.text && (
+            <p className="mb-4 border-l-2 border-ember/40 pl-3 text-sm italic text-muted-foreground line-clamp-3">
+              {editing.text}
+            </p>
+          )}
+
+          {editing.kind === "highlight" && (
+            <div className="mb-4 flex items-center gap-2">
+              {ANNOTATION_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColorDraft(c)}
+                  aria-label={`Color ${c}`}
+                  aria-pressed={colorDraft === c}
+                  className={`h-7 w-7 rounded-full border transition-transform hover:scale-110 ${
+                    colorDraft === c ? "border-foreground scale-110" : "border-black/20"
+                  }`}
+                  style={{ background: COLOR_SWATCH[c] }}
+                />
+              ))}
+            </div>
+          )}
+
+          <textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            placeholder="Add a note..."
+            rows={4}
+            data-autofocus
+            aria-label="Note"
+            className="w-full bg-input/50 border border-border rounded-md p-3 text-sm focus:outline-none focus:border-ember resize-none"
+          />
+
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              onClick={() => removeAnnotation(editing.id)}
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+            <div className="flex gap-2">
               <button
                 onClick={() => setEditingId(null)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Close editor"
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
-                <X className="w-4 h-4" />
+                Cancel
               </button>
-            </div>
-
-            {editing.text && (
-              <p className="mb-4 border-l-2 border-ember/40 pl-3 text-sm italic text-muted-foreground line-clamp-3">
-                {editing.text}
-              </p>
-            )}
-
-            {editing.kind === "highlight" && (
-              <div className="mb-4 flex items-center gap-2">
-                {ANNOTATION_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setColorDraft(c)}
-                    aria-label={`Color ${c}`}
-                    aria-pressed={colorDraft === c}
-                    className={`h-7 w-7 rounded-full border transition-transform hover:scale-110 ${
-                      colorDraft === c ? "border-foreground scale-110" : "border-black/20"
-                    }`}
-                    style={{ background: COLOR_SWATCH[c] }}
-                  />
-                ))}
-              </div>
-            )}
-
-            <textarea
-              value={noteDraft}
-              onChange={(e) => setNoteDraft(e.target.value)}
-              placeholder="Add a note..."
-              rows={4}
-              autoFocus
-              className="w-full bg-input/50 border border-border rounded-md p-3 text-sm focus:outline-none focus:border-ember resize-none"
-            />
-
-            <div className="mt-4 flex items-center justify-between">
               <button
-                onClick={() => removeAnnotation(editing.id)}
-                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive transition-colors"
+                onClick={saveEditing}
+                className="rounded-md border border-ember bg-ember/10 px-4 py-1.5 text-sm text-ember hover:bg-ember/20 transition-colors"
               >
-                <Trash2 className="w-3.5 h-3.5" /> Delete
+                Save
               </button>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setEditingId(null)}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={saveEditing}
-                  className="rounded-md border border-ember bg-ember/10 px-4 py-1.5 text-sm text-ember hover:bg-ember/20 transition-colors"
-                >
-                  Save
-                </button>
-              </div>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       )}
+    </div>
+  );
+}
+
+/**
+ * Accessible slide-over panel: WAI-ARIA dialog semantics, focus trapped while
+ * open and restored to the opener on close, Esc/backdrop-click to dismiss.
+ */
+function SlideOver({
+  title,
+  side,
+  onClose,
+  children,
+  className = "",
+  headerExtra,
+}: {
+  title: string;
+  side: "left" | "right";
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+  headerExtra?: React.ReactNode;
+}) {
+  const trapRef = useFocusTrap<HTMLDivElement>();
+  return (
+    <div
+      className="fixed inset-0 z-40"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" aria-hidden="true" />
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`absolute top-0 h-full w-full sm:w-96 bg-card p-6 overflow-y-auto border-border ${
+          side === "left" ? "left-0 border-r" : "right-0 border-l"
+        } ${className}`}
+      >
+        <div className="mb-6 flex items-center justify-between">
+          <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">{title}</h3>
+          <div className="flex items-center gap-1">
+            {headerExtra}
+            <button
+              onClick={onClose}
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground"
+              aria-label={`Close ${title.toLowerCase()}`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Accessible centered modal: dialog semantics + focus trap + Esc to close. */
+function ModalDialog({
+  label,
+  onClose,
+  children,
+}: {
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const trapRef = useFocusTrap<HTMLDivElement>();
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-md rounded-lg border border-border bg-card p-5 ember-glow"
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -1522,6 +1582,7 @@ function SettingSlider({
         max={max}
         step={step}
         value={value}
+        aria-label={label}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-ember"
       />

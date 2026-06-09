@@ -235,3 +235,24 @@ mark[data-tts] {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+
+/* Visible keyboard focus everywhere. Controls that suppress the outline
+   (e.g. inputs with focus:border-ember) provide their own indicator. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Respect prefers-reduced-motion: kill decorative animation and transitions
+   app-wide (the reader views additionally skip their slide/scroll behaviors
+   via matchMedia). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
