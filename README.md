@@ -121,5 +121,4 @@ analytics on your reading. Clearing your browser storage removes your library.
 
 ## License
 
-No license has been declared yet. Until one is added, all rights are reserved
-by the author.
+Released under the [MIT License](LICENSE).
