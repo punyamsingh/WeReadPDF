@@ -150,8 +150,21 @@ checks every commit in a pull request against the Conventional Commits spec
 a valid release. Add it as a required status check to block non-conforming
 commits from landing on `main`.
 
-> **Note:** if `main` is a protected branch, allow the GitHub Actions token (or
-> grant the bot) permission to push directly so the release commit can land.
+**One-time setup — `GH_PAT` + ruleset bypass.** `main` has a ruleset requiring
+all changes to go through a PR, and the built-in `GITHUB_TOKEN` **cannot** bypass
+it — so the release's commit push is rejected (`GH013: Repository rule
+violations`). To let semantic-release push the `chore(release)` commit:
+
+1. **Create a token** with push rights — a fine-grained PAT (repo access:
+   `Contents: Read and write`) or a GitHub App installation token.
+2. **Add it as a repo secret** named `GH_PAT` (Settings → Secrets and variables
+   → Actions). The workflow uses `GH_PAT` and falls back to `GITHUB_TOKEN`.
+3. **Add the token's owner/app to the ruleset bypass list** (Settings → Rules →
+   the `main` ruleset → *Bypass list*), so its pushes skip the PR requirement.
+
+Without these, the release computes the version correctly but fails at the push
+step. (Alternative: drop `@semantic-release/git` to publish tags + GitHub
+Releases only, with no commit back to `main`.)
 
 ## License
 

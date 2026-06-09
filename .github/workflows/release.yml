@@ -8,8 +8,9 @@ on:
   push:
     branches: [main]
 
-# Required so semantic-release can push the release commit/tag and open the
-# GitHub Release using the built-in GITHUB_TOKEN.
+# Required so semantic-release can open the GitHub Release. The push of the
+# release commit to main uses GH_PAT (below), not the built-in token, because
+# the built-in GITHUB_TOKEN cannot bypass the "require a pull request" rule.
 permissions:
   contents: write
   issues: write
@@ -30,6 +31,10 @@ jobs:
         with:
           # Full history + tags are required for commit analysis.
           fetch-depth: 0
+          # Don't leave the built-in GITHUB_TOKEN configured as the push
+          # credential — semantic-release must push with GH_PAT so it can
+          # bypass the branch ruleset.
+          persist-credentials: false
 
       - name: Release
         uses: cycjimmy/semantic-release-action@v4
@@ -39,4 +44,8 @@ jobs:
             @semantic-release/changelog
             @semantic-release/git
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GH_PAT must be a token whose owner/app is on the main ruleset's
+          # bypass list, so @semantic-release/git can push the release commit.
+          # Falls back to GITHUB_TOKEN if unset (release will then fail the
+          # push until GH_PAT is configured — see README "CI & releases").
+          GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
