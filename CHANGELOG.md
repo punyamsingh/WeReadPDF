@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.2...v1.3.3) (2026-06-10)
+
+
+### Bug Fixes
+
+* **pwa:** regenerate app icons from branded favicon ([#32](https://github.com/punyamsingh/WeReadPDF/issues/32)) ([3f39bf0](https://github.com/punyamsingh/WeReadPDF/commit/3f39bf0e17949c25f61b7a538929633b1c60d924))
+
 ## [1.3.2](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.1...v1.3.2) (2026-06-10)
 
 
