@@ -1,5 +1,18 @@
 import type * as PdfJsType from "pdfjs-dist";
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
+import {
+  buildStructure,
+  detectHeadingsByTypography,
+  extractStructHeadings,
+  finalizeStructHeadings,
+  largestLineTitle,
+  resolveTitle,
+  structureToOutline,
+  type HeadingCandidate,
+  type MarkedItem,
+  type StructTreeNode,
+  type StructureNode,
+} from "@/lib/pdf-structure";
 
 export interface ExtractedPage {
   pageNumber: number;
@@ -13,6 +26,8 @@ export interface ExtractedDoc {
   fullText: string;
   wordCount: number;
   outline: Array<{ title: string; pageNumber: number }>;
+  /** Rich, kind-aware table of contents derived by the structure cascade. */
+  structure: StructureNode[];
 }
 
 /** Which stage of the import pipeline a progress tick belongs to. */
@@ -25,6 +40,18 @@ interface TextItemLike {
   width?: number;
   height?: number;
   hasEOL?: boolean;
+  /** Key into the text content's `styles` map; used to sniff bold faces. */
+  fontName?: string;
+}
+
+/** The `styles` map pdf.js returns alongside text items. */
+type FontStyles = Record<string, { fontFamily?: string } | undefined>;
+
+/** Best-effort bold detection from the font's family/name string. */
+function isBoldFont(fontName: string | undefined, styles: FontStyles | undefined): boolean {
+  if (!fontName) return false;
+  const family = styles?.[fontName]?.fontFamily ?? "";
+  return /bold|black|heavy|semibold|\bbd\b/i.test(family) || /bold/i.test(fontName);
 }
 
 export async function extractPdf(
@@ -46,7 +73,9 @@ export async function extractPdf(
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    pageLines.push(buildPageLines(content.items as TextItemLike[]));
+    pageLines.push(
+      buildPageLines(content.items as TextItemLike[], content.styles as FontStyles | undefined),
+    );
     onProgress?.(i, pdf.numPages, "extract");
   }
 
@@ -66,23 +95,31 @@ export async function extractPdf(
     throw new Error("No extractable text found in this PDF.");
   }
 
+  // --- Structure detection: an evidence cascade, strongest source first ------
+
+  // 1. Tagged structure tree (StructTreeRoot) — when present, the PDF itself
+  //    labels H1/H2/H3, so this is the most reliable signal by far.
+  const { headings: structTree, title: structTitle } = await extractTaggedStructure(pdf);
+
+  // 2. Embedded outline / bookmarks.
   let outline: Array<{ title: string; pageNumber: number }> = [];
   try {
     const raw = await pdf.getOutline();
-    if (raw && raw.length) {
-      outline = await flattenOutline(pdf, raw);
-    }
+    if (raw && raw.length) outline = await flattenOutline(pdf, raw);
   } catch {
     /* ignore */
   }
 
-  // Many PDFs (especially scanned or exported-from-Word books) ship no embedded
-  // outline at all. Rather than fall back to meaningless "Page N" markers, sniff
-  // the text for real chapter headings.
-  if (outline.length < 2) {
-    const detected = detectChapters(pages);
-    if (detected.length >= 2) outline = detected;
-  }
+  // 3. Typography — heading lines stand out by size/weight. Run it on the
+  //    header/footer-stripped lines so running heads can't pose as sections.
+  const cleanedLines = pageLines.map((lines) => stripRepeatedEdges(lines, repeated));
+  const typography = detectHeadingsByTypography(cleanedLines);
+
+  // 4. Keyword/chapter detection (novels) as the weakest structured source.
+  const chapters = detectChapters(pages);
+
+  const structure = buildStructure({ structTree, outline, typography, chapters });
+  outline = structureToOutline(structure);
 
   // Last resort: evenly spaced page markers so the contents panel is never empty.
   if (outline.length === 0) {
@@ -96,11 +133,19 @@ export async function extractPdf(
 
   const meta = await pdf.getMetadata().catch(() => null);
   const info = (meta?.info ?? {}) as Record<string, unknown>;
-  const metaTitle =
-    (typeof info.Title === "string" ? info.Title.trim() : "") || file.name.replace(/\.pdf$/i, "");
   const author = typeof info.Author === "string" ? info.Author.trim() : "";
 
-  return { title: metaTitle, author, pages, fullText, wordCount, outline };
+  // The embedded /Title is frequently producer junk ("gr1.eps"); resolve the
+  // real title from the tagged tree, then valid metadata, then the largest line
+  // on page 1, then the filename.
+  const title = resolveTitle({
+    structTitle,
+    metaTitle: typeof info.Title === "string" ? info.Title : undefined,
+    typographyTitle: largestLineTitle(pageLines[0] ?? []),
+    fileName: file.name,
+  });
+
+  return { title, author, pages, fullText, wordCount, outline, structure };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +158,10 @@ interface Line {
   x: number;
   /** Baseline (vertical position) in PDF points; larger = higher on the page. */
   y: number;
+  /** Representative font size (points) of the line — drives heading detection. */
+  size?: number;
+  /** True when most of the line is set in a bold face. */
+  bold?: boolean;
 }
 
 /** A text item with resolved page geometry. */
@@ -122,6 +171,9 @@ interface PlacedItem {
   y: number;
   w: number;
   h: number;
+  /** Glyph font size (points), from the text transform. */
+  size: number;
+  bold: boolean;
 }
 
 /** An empty vertical strip separating two columns of text. */
@@ -130,14 +182,28 @@ interface Gutter {
   end: number;
 }
 
-function buildPageLines(items: TextItemLike[]): Line[] {
-  const placed = collectItems(items);
+/**
+ * Reconstruct a page's lines in reading order: column-aware when a multi-column
+ * layout is detected, otherwise following the content-stream order (which keeps
+ * superscripts and the like in place).
+ */
+function buildPageLines(items: TextItemLike[], styles?: FontStyles): Line[] {
+  const placed = collectItems(items, styles);
   const split = splitColumns(placed, detectGutters(placed));
   if (split) return orderByColumns(split);
-  return streamLines(items);
+  return streamLines(items, styles);
 }
 
-function collectItems(items: TextItemLike[]): PlacedItem[] {
+/** Font size in points from a text item's transform (vertical scale). */
+const itemSize = (t: number[], fallback?: number) =>
+  Math.hypot(t[2] ?? 0, t[3] ?? 0) || fallback || 10;
+
+/**
+ * Resolve raw pdf.js text items into placed items carrying page geometry plus
+ * the font size and bold weight the heading detector needs. Blank items are
+ * dropped.
+ */
+function collectItems(items: TextItemLike[], styles?: FontStyles): PlacedItem[] {
   const out: PlacedItem[] = [];
   for (const it of items) {
     if (!it.str || !it.str.trim()) continue;
@@ -149,9 +215,25 @@ function collectItems(items: TextItemLike[]): PlacedItem[] {
       y: t[5],
       w: it.width ?? 0,
       h: it.height || Math.abs(t[3]) || 10,
+      size: itemSize(t, it.height),
+      bold: isBoldFont(it.fontName, styles),
     });
   }
   return out;
+}
+
+/** Median glyph size of a line's items — robust to the odd super/subscript. */
+const lineSize = (items: PlacedItem[]) => median(items.map((i) => i.size));
+
+/** A line reads as bold when most of its characters are set bold. */
+function lineBold(items: PlacedItem[]): boolean {
+  let bold = 0;
+  let total = 0;
+  for (const i of items) {
+    total += i.str.length;
+    if (i.bold) bold += i.str.length;
+  }
+  return total > 0 && bold / total > 0.6;
 }
 
 /**
@@ -159,25 +241,44 @@ function collectItems(items: TextItemLike[]): PlacedItem[] {
  * order (the original extraction behaviour). A new line starts whenever the
  * baseline moves by more than a couple of points.
  */
-function streamLines(items: TextItemLike[]): Line[] {
+function streamLines(items: TextItemLike[], styles?: FontStyles): Line[] {
   const lines: Line[] = [];
   let cur = "";
   let curX: number | null = null;
   let lastY: number | null = null;
+  let sizes: number[] = [];
+  let boldChars = 0;
+  let totalChars = 0;
 
   const flushLine = () => {
     const s = cur.replace(/\s+/g, " ").trim();
-    if (s) lines.push({ str: s, x: curX ?? 0, y: lastY ?? 0 });
+    if (s) {
+      lines.push({
+        str: s,
+        x: curX ?? 0,
+        y: lastY ?? 0,
+        size: median(sizes),
+        bold: totalChars > 0 && boldChars / totalChars > 0.6,
+      });
+    }
     cur = "";
     curX = null;
+    sizes = [];
+    boldChars = 0;
+    totalChars = 0;
   };
 
   for (const item of items) {
-    const x = item.transform?.[4];
-    const y = item.transform?.[5];
+    const t = item.transform;
+    const x = t?.[4];
+    const y = t?.[5];
     if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 2) flushLine();
     if (curX === null && x !== undefined) curX = x;
     cur += item.str;
+    if (t) sizes.push(itemSize(t, item.height));
+    const len = item.str?.length ?? 0;
+    totalChars += len;
+    if (isBoldFont(item.fontName, styles)) boldChars += len;
     if (item.hasEOL) cur += " ";
     if (y !== undefined) lastY = y;
   }
@@ -309,19 +410,33 @@ function orderByColumns(split: ColumnSplit): Line[] {
     for (let c = 0; c < colLines.length; c++) {
       for (const line of colLines[c]) {
         if (bandOf(line.y) !== band) continue;
-        out.push({ str: line.str, x: line.x - split.columnLeft[c], y: line.y });
+        out.push({
+          str: line.str,
+          x: line.x - split.columnLeft[c],
+          y: line.y,
+          size: line.size,
+          bold: line.bold,
+        });
       }
     }
     if (band < sepLines.length) {
       const s = sepLines[band];
-      out.push({ str: s.str, x: s.x - split.bodyLeft, y: s.y });
+      out.push({ str: s.str, x: s.x - split.bodyLeft, y: s.y, size: s.size, bold: s.bold });
     }
   }
   return out;
 }
 
+interface GroupedLine {
+  str: string;
+  x: number;
+  y: number;
+  size: number;
+  bold: boolean;
+}
+
 /** Group loose items into physical lines (top-to-bottom, left-to-right). */
-function groupIntoLines(items: PlacedItem[]): Array<{ str: string; x: number; y: number }> {
+function groupIntoLines(items: PlacedItem[]): GroupedLine[] {
   if (!items.length) return [];
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines: Array<{ items: PlacedItem[]; y: number }> = [];
@@ -337,6 +452,8 @@ function groupIntoLines(items: PlacedItem[]): Array<{ str: string; x: number; y:
         str: joinLineItems(inOrder).replace(/\s+/g, " ").trim(),
         x: inOrder[0].x,
         y: l.y,
+        size: lineSize(inOrder),
+        bold: lineBold(inOrder),
       };
     })
     .filter((l) => l.str);
@@ -680,4 +797,43 @@ async function flattenOutline(
     }
   }
   return out;
+}
+
+/**
+ * Read the tagged structure tree (`/StructTreeRoot`) page by page and lift out
+ * its H1–H6/Title headings. Gated on page 1 actually having a tree, so an
+ * untagged PDF pays only one cheap probe; tagged docs get a second text read
+ * with marked-content markers, which is how each tag is tied back to its
+ * glyphs.
+ */
+async function extractTaggedStructure(
+  pdf: PdfJsType.PDFDocumentProxy,
+): Promise<{ headings: HeadingCandidate[]; title?: string }> {
+  let firstTree: StructTreeNode | null = null;
+  try {
+    const p1 = await pdf.getPage(1);
+    firstTree = (await p1.getStructTree()) as unknown as StructTreeNode | null;
+  } catch {
+    firstTree = null;
+  }
+  if (!firstTree) return { headings: [] };
+
+  const raw: Array<{ level: number; title: string; page: number }> = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    try {
+      const page = await pdf.getPage(i);
+      const [tree, content] = await Promise.all([
+        page.getStructTree(),
+        page.getTextContent({ includeMarkedContent: true }),
+      ]);
+      const heads = extractStructHeadings(
+        tree as unknown as StructTreeNode | null,
+        content.items as unknown as MarkedItem[],
+      );
+      for (const h of heads) raw.push({ ...h, page: i });
+    } catch {
+      /* skip a page that won't parse */
+    }
+  }
+  return finalizeStructHeadings(raw);
 }

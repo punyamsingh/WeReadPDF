@@ -1,3 +1,5 @@
+import type { StructureNode } from "@/lib/pdf-structure";
+
 export type FontFamily = "serif" | "sans" | "literata" | "dyslexic";
 export type ReaderTheme = "dark" | "night" | "sepia" | "light";
 
@@ -130,6 +132,9 @@ export interface CachedDoc {
   author?: string;
   pages: Array<{ pageNumber: number; text: string }>;
   outline: Array<{ title: string; pageNumber: number }>;
+  /** Kind-aware contents from the structure cascade. Optional: docs cached
+   *  before this field shipped fall back to `outline`. */
+  structure?: StructureNode[];
   wordCount: number;
   savedAt: number;
 }

@@ -632,7 +632,27 @@ export function Reader({ doc, onExit }: Props) {
     };
   }, [settings.theme, settings.brightness]);
 
-  const filteredOutline = doc.outline.filter((o) =>
+  // Prefer the kind-aware structure when present (so the contents panel can show
+  // levels, section numbers, and labels like "References"); fall back to the
+  // flat outline for docs cached before structure shipped.
+  const tocItems = useMemo(() => {
+    if (doc.structure?.length) {
+      return doc.structure.map((n) => ({
+        title: n.title.trim(),
+        pageNumber: n.page,
+        level: n.level,
+        kind: n.kind,
+      }));
+    }
+    return doc.outline.map((o) => ({
+      title: o.title.trim(),
+      pageNumber: o.pageNumber,
+      level: Math.floor((o.title.match(/^\s*/)?.[0].length ?? 0) / 2) + 1,
+      kind: undefined as string | undefined,
+    }));
+  }, [doc.structure, doc.outline]);
+
+  const filteredToc = tocItems.filter((o) =>
     query ? o.title.toLowerCase().includes(query.toLowerCase()) : true,
   );
 
@@ -1181,7 +1201,7 @@ export function Reader({ doc, onExit }: Props) {
             />
           </div>
           <ul className="space-y-1">
-            {filteredOutline.map((item, i) => (
+            {filteredToc.map((item, i) => (
               <li key={i}>
                 <button
                   onClick={() => {
@@ -1192,15 +1212,18 @@ export function Reader({ doc, onExit }: Props) {
                     pos.sourcePage === item.pageNumber
                       ? "bg-ember/10 text-ember"
                       : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                  }`}
+                  } ${item.level > 1 ? "text-xs" : ""}`}
                 >
                   <span
-                    className="truncate"
-                    style={{
-                      paddingLeft: `${(item.title.match(/^\s*/)?.[0].length || 0) * 4}px`,
-                    }}
+                    className="truncate flex items-center gap-2"
+                    style={{ paddingLeft: `${Math.max(0, item.level - 1) * 12}px` }}
                   >
-                    {item.title.trim()}
+                    {item.kind && item.kind !== "section" && item.kind !== "subsection" && (
+                      <span className="text-[10px] uppercase tracking-wide opacity-50 shrink-0">
+                        {item.kind}
+                      </span>
+                    )}
+                    <span className="truncate">{item.title}</span>
                   </span>
                   <span className="text-xs opacity-70 shrink-0">{item.pageNumber}</span>
                 </button>
