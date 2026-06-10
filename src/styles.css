@@ -188,6 +188,116 @@
   animation: fade-up 0.6s ease-out both;
 }
 
+/* ------------------------------------------------------------------ *
+ * The girl on fire — atmospheric motion for the landing.
+ * All of this is decorative and is silenced by prefers-reduced-motion
+ * via the global rule at the bottom of this file.
+ * ------------------------------------------------------------------ */
+
+/* Embers drifting up from the dark, like sparks off a flame. Each spark sets
+   its own --spark-drift / --spark-opacity and animation timing inline. */
+@keyframes ember-rise {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0;
+  }
+  12% {
+    opacity: var(--spark-opacity, 0.9);
+  }
+  85% {
+    opacity: var(--spark-opacity, 0.9);
+  }
+  100% {
+    transform: translate(var(--spark-drift, 0px), calc(-1 * var(--spark-travel, 100vh))) scale(0.2);
+    opacity: 0;
+  }
+}
+
+.ember-spark {
+  position: absolute;
+  bottom: -24px;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle,
+    oklch(0.92 0.13 80) 0%,
+    oklch(0.74 0.2 48 / 0.7) 45%,
+    transparent 72%
+  );
+  box-shadow: 0 0 8px 1px var(--ember-glow);
+  animation-name: ember-rise;
+  animation-timing-function: ease-in;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+/* Slow drift for the big background glow blobs, so the dark feels alive. */
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate(-50%, 0) scale(1);
+  }
+  50% {
+    transform: translate(-50%, 36px) scale(1.08);
+  }
+}
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-42px, -34px) scale(1.12);
+  }
+}
+@utility animate-drift-a {
+  animation: drift-a 14s ease-in-out infinite;
+}
+@utility animate-drift-b {
+  animation: drift-b 18s ease-in-out infinite;
+}
+
+/* Molten shimmer that sweeps across the headline accent. */
+@keyframes ember-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+@utility text-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    oklch(0.72 0.19 52) 0%,
+    oklch(0.93 0.14 88) 25%,
+    oklch(0.68 0.2 42) 50%,
+    oklch(0.93 0.14 88) 75%,
+    oklch(0.72 0.19 52) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 24px var(--ember-glow));
+  animation: ember-shimmer 7s linear infinite;
+}
+
+/* Breathing halo for the hero Mockingjay. */
+@keyframes pin-breathe {
+  0%,
+  100% {
+    opacity: 0.08;
+    transform: translate(-50%, -4rem) scale(1);
+  }
+  50% {
+    opacity: 0.16;
+    transform: translate(-50%, -4rem) scale(1.04);
+  }
+}
+@utility animate-pin-breathe {
+  animation: pin-breathe 8s ease-in-out infinite;
+}
+
 /* In-book search highlighting. Background-only (no padding/border) so marks
    never change text metrics — the paginated view's screens must not shift
    when a search lights up. */

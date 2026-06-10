@@ -4,6 +4,7 @@ import { loadProgress, type CachedDoc } from "@/lib/reader-store";
 import type { ImportProgress } from "./App";
 import { DropZone } from "./DropZone";
 import { Mockingjay } from "./Mockingjay";
+import { EmberField } from "./EmberField";
 
 interface Props {
   docs: CachedDoc[];
@@ -100,17 +101,25 @@ export function Library({
 
   return (
     <div className="min-h-screen relative overflow-hidden">
-      {/* Ember atmospherics */}
+      {/* Ember atmospherics — slow-drifting glow blobs + a field of rising sparks */}
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div
-          className="absolute -top-32 left-1/2 -translate-x-1/2 w-[900px] h-[900px] rounded-full opacity-30 blur-3xl"
+          className="absolute -top-32 left-1/2 w-[900px] h-[900px] rounded-full opacity-30 blur-3xl animate-drift-a"
           style={{ background: "radial-gradient(circle, var(--ember) 0%, transparent 60%)" }}
         />
         <div
-          className="absolute bottom-0 right-0 w-[500px] h-[500px] rounded-full opacity-20 blur-3xl"
+          className="absolute bottom-0 right-0 w-[500px] h-[500px] rounded-full opacity-20 blur-3xl animate-drift-b"
           style={{ background: "radial-gradient(circle, var(--accent) 0%, transparent 60%)" }}
         />
+        <div
+          className="absolute top-1/3 -left-40 w-[420px] h-[420px] rounded-full opacity-[0.12] blur-3xl animate-drift-b"
+          style={{
+            background: "radial-gradient(circle, var(--ember) 0%, transparent 65%)",
+            animationDelay: "-6s",
+          }}
+        />
       </div>
+      <EmberField />
 
       {/* Nav */}
       <nav className="px-6 sm:px-10 py-6 flex items-center justify-between max-w-7xl mx-auto">
@@ -195,7 +204,7 @@ function Shelf({
     <section className="px-6 sm:px-10 pb-20 max-w-6xl mx-auto">
       <p className="text-xs uppercase tracking-[0.4em] text-ember mb-2">— Read in private —</p>
       <h1 className="font-display font-black tracking-tight text-3xl sm:text-5xl mb-10">
-        Your library
+        Your <span className="text-shimmer">library</span>
       </h1>
 
       {continueItem && (
@@ -440,8 +449,8 @@ function EmptyState({
   return (
     <>
       <section className="relative px-6 sm:px-10 pt-12 sm:pt-20 pb-20 max-w-4xl mx-auto text-center">
-        {/* The Mockingjay, smouldering over the page */}
-        <Mockingjay className="pointer-events-none absolute left-1/2 top-0 -z-10 w-[440px] -translate-x-1/2 -translate-y-16 opacity-[0.08]" />
+        {/* The Mockingjay, smouldering and breathing over the page */}
+        <Mockingjay className="pointer-events-none absolute left-1/2 top-0 -z-10 w-[440px] animate-pin-breathe" />
         <p className="text-xs uppercase tracking-[0.4em] text-ember mb-6 animate-fade-up">
           — Welcome, tribute —
         </p>
@@ -451,7 +460,7 @@ function EmptyState({
         >
           May the words be
           <br />
-          <span className="text-ember">ever in your favor.</span>
+          <span className="text-shimmer">ever in your favor.</span>
         </h1>
         <p
           className="mt-8 text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto font-serif italic animate-fade-up"
@@ -461,7 +470,12 @@ function EmptyState({
           read on any screen — every PDF read in your own private arena.
         </p>
 
-        <div className="mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
+        <div className="relative mt-12 animate-fade-up" style={{ animationDelay: "0.3s" }}>
+          {/* Ember halo pooling behind the drop target */}
+          <div
+            className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-72 w-[34rem] max-w-full -translate-x-1/2 -translate-y-1/2 rounded-full opacity-40 blur-3xl"
+            style={{ background: "radial-gradient(circle, var(--ember-glow) 0%, transparent 70%)" }}
+          />
           <DropZone loading={loading} progress={progress} error={error} onFile={onFile} />
         </div>
 
@@ -477,9 +491,19 @@ function EmptyState({
           {FEATURES.map((f, i) => (
             <div
               key={i}
-              className="group p-8 rounded-lg border border-border/60 bg-card/40 backdrop-blur hover:border-ember/40 transition-all duration-500 hover:bg-card/80"
+              className="group relative overflow-hidden p-8 rounded-lg border border-border/60 bg-card/40 backdrop-blur transition-all duration-500 hover:-translate-y-1 hover:border-ember/50 hover:bg-card/80 hover:shadow-[0_24px_60px_-30px_var(--ember-glow)] animate-fade-up"
+              style={{ animationDelay: `${0.15 * i}s` }}
             >
-              <f.icon className="w-5 h-5 text-ember mb-4 group-hover:animate-flicker" />
+              {/* Ember filament that ignites along the top edge on hover */}
+              <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-ember to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+              <div className="mb-5 flex items-center justify-between">
+                <span className="flex h-11 w-11 items-center justify-center rounded-full border border-ember/30 bg-ember/5 transition-colors group-hover:border-ember/60 group-hover:bg-ember/10">
+                  <f.icon className="w-5 h-5 text-ember group-hover:animate-flicker" />
+                </span>
+                <span className="font-display text-2xl text-ember/20 transition-colors group-hover:text-ember/40">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+              </div>
               <h3 className="font-display uppercase tracking-[0.2em] text-sm mb-3">{f.title}</h3>
               <p className="text-sm text-muted-foreground font-serif leading-relaxed">{f.body}</p>
             </div>
