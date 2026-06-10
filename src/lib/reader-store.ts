@@ -156,10 +156,13 @@ export interface CachedDoc {
 // ---------------------------------------------------------------------------
 
 const DB_NAME = "wereadpdf";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DOC_STORE = "docs";
+/** Bookmarks/highlights/notes, keyed by annotation id, indexed by doc key. */
+export const ANNOTATION_STORE = "annotations";
 
-function openDB(): Promise<IDBDatabase> {
+/** Open the app database. Shared with the annotation store (annotations.ts). */
+export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
       reject(new Error("IndexedDB unavailable"));
@@ -171,13 +174,17 @@ function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(DOC_STORE)) {
         db.createObjectStore(DOC_STORE, { keyPath: "key" });
       }
+      if (!db.objectStoreNames.contains(ANNOTATION_STORE)) {
+        const store = db.createObjectStore(ANNOTATION_STORE, { keyPath: "id" });
+        store.createIndex("docKey", "docKey", { unique: false });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 
-function tx<T>(store: IDBObjectStore, req: IDBRequest<T>): Promise<T> {
+export function tx<T>(store: IDBObjectStore, req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -256,12 +263,19 @@ export async function renameDoc(key: string, title: string): Promise<void> {
   }
 }
 
-/** Permanently remove a document and its saved progress. */
+/** Permanently remove a document, its annotations, and its saved progress. */
 export async function deleteDoc(key: string): Promise<void> {
   const db = await openDB();
   try {
-    const store = db.transaction(DOC_STORE, "readwrite").objectStore(DOC_STORE);
+    const t = db.transaction([DOC_STORE, ANNOTATION_STORE], "readwrite");
+    const store = t.objectStore(DOC_STORE);
     await tx(store, store.delete(key));
+    const annStore = t.objectStore(ANNOTATION_STORE);
+    const ids = (await tx(
+      annStore,
+      annStore.index("docKey").getAllKeys(IDBKeyRange.only(key)),
+    )) as IDBValidKey[];
+    for (const id of ids) await tx(annStore, annStore.delete(id));
   } finally {
     db.close();
   }

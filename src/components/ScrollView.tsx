@@ -11,7 +11,14 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, countWords, deriveTitles } from "@/lib/book-content";
-import type { BookApi, ReadingPosition } from "./BookView";
+import type {
+  BookApi,
+  HighlightsByPage,
+  ReadingPosition,
+  SearchState,
+  TtsHighlight,
+} from "./BookView";
+import { renderBlock } from "./highlight";
 
 interface Props {
   doc: CachedDoc;
@@ -21,6 +28,14 @@ interface Props {
   onChange: (pos: ReadingPosition) => void;
   /** Fired on a center tap — used to toggle the chrome. */
   onCenterTap: () => void;
+  /** In-book search: highlights every hit and navigates on navToken bumps. */
+  search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
+  /** Fired when a highlight mark is tapped (open its editor). */
+  onAnnotationTap?: (id: string) => void;
+  /** Sentence being read aloud — highlighted and kept in view. */
+  tts?: TtsHighlight | null;
 }
 
 // Horizontal breathing room (the "side margin" setting adds to it) and the
@@ -67,7 +82,17 @@ function estimateHeight(b: Block, settings: ReaderSettings, isChapter: boolean):
  * survive reflows when typography changes — the same contract as `BookView`.
  */
 export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap },
+  {
+    doc,
+    settings,
+    initialSourcePage,
+    onChange,
+    onCenterTap,
+    search,
+    highlights,
+    onAnnotationTap,
+    tts,
+  },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -255,6 +280,44 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     [turnBy, scrollToSource, reduceMotion],
   );
 
+  // An explicit search jump centers the active <mark>; if it isn't in the DOM
+  // yet (or the page had no mark), fall back to the top of its source page.
+  useEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    const target = search.active;
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current?.querySelector<HTMLElement>(
+        'mark[data-search][data-active="true"]',
+      );
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      } else {
+        scrollToSource(target.srcPage, !reduceMotion);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken]);
+
+  // Read-aloud follows the narrator: keep the spoken sentence comfortably in
+  // view, scrolling as speech advances.
+  useEffect(() => {
+    if (!tts) return;
+    const cont = scrollRef.current;
+    if (!cont) return;
+    const el = cont.querySelector<HTMLElement>("mark[data-tts]");
+    if (!el) {
+      scrollToSource(tts.srcPage, false);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const c = cont.getBoundingClientRect();
+    const margin = 96;
+    if (r.top < c.top + margin || r.bottom > c.bottom - margin) {
+      el.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+    }
+  }, [tts, scrollToSource, reduceMotion]);
+
   // Tap zones: edges page a screen, center toggles the chrome. A real scroll or
   // a text selection is never mistaken for a tap.
   const gesture = useRef<{ x: number; y: number; t: number; top: number } | null>(null);
@@ -275,6 +338,12 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     const moved = Math.abs(e.clientX - g.x) > 12 || Math.abs(e.clientY - g.y) > 12;
     const scrolled = Math.abs((scrollRef.current?.scrollTop ?? 0) - g.top) > 4;
     if (moved || scrolled || Date.now() - g.t > 500) return; // a drag/scroll, not a tap
+    // A tap on a highlight opens its editor instead of paging.
+    const mark = (e.target as HTMLElement).closest?.("mark[data-annotation-id]");
+    if (mark instanceof HTMLElement && mark.dataset.annotationId) {
+      onAnnotationTap?.(mark.dataset.annotationId);
+      return;
+    }
     const rect = scrollRef.current?.getBoundingClientRect();
     const W = rect?.width ?? 0;
     const x = e.clientX - (rect?.left ?? 0);
@@ -311,6 +380,23 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
           const isChapter = chapterStarts.has(b.srcPage);
           const title = titleForSrc.get(b.srcPage);
           const showHeading = isChapter && b.srcPage !== globalFirstSrcPage && !!title;
+          const pageRanges = highlights?.get(b.srcPage);
+          const blockTts = tts?.srcPage === b.srcPage ? tts : null;
+          const paraNodes =
+            search?.term || pageRanges || blockTts
+              ? renderBlock(
+                  b.paras,
+                  search?.term
+                    ? {
+                        term: search.term,
+                        activeOrdinal:
+                          search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+                      }
+                    : null,
+                  pageRanges,
+                  blockTts,
+                )
+              : b.paras;
           return (
             <section
               key={b.srcPage}
@@ -351,9 +437,10 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
                   </div>
                 </div>
               )}
-              {b.paras.map((para, i) => (
+              {paraNodes.map((para, i) => (
                 <Fragment key={i}>
                   <p
+                    data-para-idx={i}
                     style={{
                       marginTop: 0,
                       marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,

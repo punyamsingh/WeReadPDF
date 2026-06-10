@@ -4,6 +4,8 @@ import {
   List,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   X,
   Sun,
   Moon,
@@ -13,6 +15,18 @@ import {
   Search,
   BookCopy,
   ScrollText,
+  Bookmark,
+  BookMarked,
+  Trash2,
+  Pencil,
+  Download,
+  StickyNote,
+  Headphones,
+  Play,
+  Pause,
+  Square,
+  SkipBack,
+  SkipForward,
 } from "lucide-react";
 import type { CachedDoc, FontFamily, ReaderTheme, ReadingMode } from "@/lib/reader-store";
 import { Mockingjay } from "./Mockingjay";
@@ -24,8 +38,34 @@ import {
   loadProgress,
   type ReaderSettings,
 } from "@/lib/reader-store";
-import { BookView, type BookApi, type ReadingPosition } from "./BookView";
+import { buildBlocks } from "@/lib/book-content";
+import { searchBook, MIN_QUERY, SEARCH_LIMIT } from "@/lib/book-search";
+import {
+  ANNOTATION_COLORS,
+  annotationsToMarkdown,
+  countOccurrences,
+  createAnnotationId,
+  deleteAnnotation,
+  listAnnotations,
+  placeAnnotations,
+  saveAnnotation,
+  type Annotation,
+  type AnnotationColor,
+} from "@/lib/annotations";
+import { useTts } from "@/hooks/use-tts";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
+import {
+  BookView,
+  type BookApi,
+  type HighlightsByPage,
+  type ReadingPosition,
+  type SearchState,
+  type TtsHighlight,
+} from "./BookView";
 import { ScrollView } from "./ScrollView";
+
+/** Speech-rate choices for the read-aloud bar. */
+const TTS_RATES = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
 const READING_MODES: Array<{ id: ReadingMode; label: string; icon: typeof BookCopy }> = [
   { id: "paginated", label: "Pages", icon: BookCopy },
@@ -65,6 +105,51 @@ const THEMES: Record<
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
+/** Swatch colors for the highlight palette (mirrors the mark styles in styles.css). */
+const COLOR_SWATCH: Record<AnnotationColor, string> = {
+  gold: "oklch(0.85 0.16 90)",
+  ember: "oklch(0.72 0.18 50)",
+  moss: "oklch(0.74 0.13 135)",
+  sky: "oklch(0.74 0.1 235)",
+};
+
+/** Resolve which source PDF page a DOM node belongs to by walking back to the
+ *  nearest preceding `[data-src]` anchor (sibling in the paginated view,
+ *  ancestor section in the scroll view). */
+function srcPageForNode(start: Element): number | null {
+  let el: Element | null = start;
+  while (el) {
+    let cur: Element | null = el;
+    while (cur) {
+      if (cur instanceof HTMLElement && cur.dataset.src) return Number(cur.dataset.src);
+      cur = cur.previousElementSibling;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/** Count occurrence start-positions of `needle` strictly before `before`. */
+function countStartsBefore(hay: string, needle: string, before: number): number {
+  if (!needle) return 0;
+  let n = 0;
+  let i = hay.indexOf(needle);
+  while (i !== -1 && i < before) {
+    n++;
+    i = hay.indexOf(needle, i + 1);
+  }
+  return n;
+}
+
+/** A text selection resolved to its page anchor, ready to become a highlight. */
+interface PendingSelection {
+  srcPage: number;
+  text: string;
+  ordinal: number;
+  /** Viewport coords for positioning the floating toolbar. */
+  rect: { top: number; bottom: number; centerX: number };
+}
+
 function oklch([l, c, h]: [number, number, number], alpha?: number) {
   const a = alpha === undefined ? "" : ` / ${alpha}`;
   return `oklch(${l.toFixed(3)} ${c} ${h}${a})`;
@@ -85,7 +170,22 @@ export function Reader({ doc, onExit }: Props) {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [showToc, setShowToc] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showMarks, setShowMarks] = useState(false);
   const [query, setQuery] = useState("");
+  // Bookmarks/highlights/notes for this book, plus the selection being turned
+  // into a highlight and the annotation whose editor is open.
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [pendingSel, setPendingSel] = useState<PendingSelection | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [colorDraft, setColorDraft] = useState<AnnotationColor>("gold");
+  // Full-text search: live input, debounced needle, stepped-to match index, and
+  // a token that bumps on every explicit jump so the views know when to move.
+  const [searchInput, setSearchInput] = useState("");
+  const [needle, setNeedle] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [navToken, setNavToken] = useState(0);
   const [chrome, setChrome] = useState(true);
   const [showHint, setShowHint] = useState(() => {
     try {
@@ -131,9 +231,340 @@ export function Reader({ doc, onExit }: Props) {
     lastPageRef.current = pos.page;
   }, [pos.page, dismissHint]);
 
+  // ---- Full-text search ----------------------------------------------------
+
+  const blocks = useMemo(() => buildBlocks(doc), [doc]);
+
+  // Debounce typing into the needle that actually drives matching/highlighting,
+  // so a 300+ page book never re-scans on every keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setNeedle(searchInput.trim().toLowerCase());
+      setActiveIdx(0);
+    }, 250);
+    return () => clearTimeout(id);
+  }, [searchInput]);
+
+  const matches = useMemo(() => searchBook(blocks, needle), [blocks, needle]);
+  const clampedIdx = matches.length ? Math.min(activeIdx, matches.length - 1) : 0;
+
+  const searchState = useMemo<SearchState | undefined>(() => {
+    if (needle.length < MIN_QUERY) return undefined;
+    const m = matches[clampedIdx];
+    return {
+      term: needle,
+      active: m ? { srcPage: m.srcPage, ordinal: m.ordinal } : null,
+      navToken,
+    };
+  }, [needle, matches, clampedIdx, navToken]);
+
+  const goToMatch = useCallback((i: number) => {
+    setActiveIdx(i);
+    setNavToken((t) => t + 1);
+  }, []);
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      if (!matches.length) return;
+      goToMatch((clampedIdx + dir + matches.length) % matches.length);
+    },
+    [matches.length, clampedIdx, goToMatch],
+  );
+
+  const clearSearch = useCallback(() => {
+    setSearchInput("");
+    setNeedle("");
+    setActiveIdx(0);
+  }, []);
+
+  // ---- Bookmarks, highlights & notes ----------------------------------------
+
+  const bookWrapRef = useRef<HTMLDivElement>(null);
+  const blockByPage = useMemo(() => new Map(blocks.map((b) => [b.srcPage, b])), [blocks]);
+
+  // Persistence failures must not be invisible: the optimistic UI update is
+  // reconciled back to what IndexedDB actually holds, and a transient notice
+  // tells the reader the mark won't survive a reload.
+  const [annError, setAnnError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!annError) return;
+    const id = setTimeout(() => setAnnError(null), 5000);
+    return () => clearTimeout(id);
+  }, [annError]);
+
+  const reloadAnnotations = useCallback(() => {
+    listAnnotations(doc.key)
+      .then(setAnnotations)
+      .catch(() => {
+        /* storage unavailable — keep the optimistic state on screen */
+      });
+  }, [doc.key]);
+
+  useEffect(() => {
+    let alive = true;
+    listAnnotations(doc.key)
+      .then((a) => alive && setAnnotations(a))
+      .catch(() => alive && setAnnError("Couldn't load the marks saved for this book."));
+    return () => {
+      alive = false;
+    };
+  }, [doc.key]);
+
+  const upsertAnnotation = useCallback(
+    (a: Annotation) => {
+      setAnnotations((prev) => {
+        const next = prev.some((x) => x.id === a.id)
+          ? prev.map((x) => (x.id === a.id ? a : x))
+          : [...prev, a];
+        return next.sort(
+          (x, y) =>
+            x.srcPage - y.srcPage ||
+            (x.ordinal ?? 0) - (y.ordinal ?? 0) ||
+            x.createdAt - y.createdAt,
+        );
+      });
+      saveAnnotation(a).catch(() => {
+        setAnnError("Couldn't save that mark — it won't survive a reload.");
+        reloadAnnotations();
+      });
+    },
+    [reloadAnnotations],
+  );
+
+  const removeAnnotation = useCallback(
+    (id: string) => {
+      setAnnotations((prev) => prev.filter((a) => a.id !== id));
+      setEditingId((e) => (e === id ? null : e));
+      deleteAnnotation(id).catch(() => {
+        setAnnError("Couldn't delete that mark.");
+        reloadAnnotations();
+      });
+    },
+    [reloadAnnotations],
+  );
+
+  // Resolve highlight text-anchors into concrete paragraph ranges per page.
+  const highlightsByPage = useMemo<HighlightsByPage>(() => {
+    const byPage = new Map<number, Annotation[]>();
+    for (const a of annotations) {
+      if (a.kind !== "highlight") continue;
+      const arr = byPage.get(a.srcPage) ?? [];
+      arr.push(a);
+      byPage.set(a.srcPage, arr);
+    }
+    const out: HighlightsByPage = new Map();
+    for (const [srcPage, anns] of byPage) {
+      const paras = blockByPage.get(srcPage)?.paras;
+      if (paras) out.set(srcPage, placeAnnotations(paras, anns));
+    }
+    return out;
+  }, [annotations, blockByPage]);
+
+  // Track text selections inside the book so the highlight toolbar can follow
+  // them. The anchor (page, exact text, occurrence ordinal) is computed here,
+  // while the selection's DOM range is still alive.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection?.();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        setPendingSel(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const wrap = bookWrapRef.current;
+      if (!wrap || !wrap.contains(range.commonAncestorContainer)) {
+        setPendingSel(null);
+        return;
+      }
+      const startEl =
+        range.startContainer instanceof Element
+          ? range.startContainer
+          : range.startContainer.parentElement;
+      const pEl = startEl?.closest("p");
+      if (!pEl) {
+        setPendingSel(null);
+        return;
+      }
+      const srcPage = srcPageForNode(pEl);
+      if (srcPage === null) {
+        setPendingSel(null);
+        return;
+      }
+      const block = blockByPage.get(srcPage);
+      if (!block) {
+        setPendingSel(null);
+        return;
+      }
+
+      // Clamp the selection to its start paragraph so the anchor stays exact —
+      // paragraph text is the unit highlights are re-found in.
+      const clip = range.cloneRange();
+      if (!pEl.contains(range.endContainer)) clip.setEnd(pEl, pEl.childNodes.length);
+      const text = clip.toString();
+      if (!text.trim() || text.length > 1000) {
+        setPendingSel(null);
+        return;
+      }
+
+      const paraText = pEl.textContent ?? "";
+      // The rendered <p> carries its own index — stable even when the same
+      // paragraph text repeats on a page (a text lookup would always hit the
+      // first copy and mis-anchor the highlight). Text match stays as a
+      // sanity check / fallback only.
+      const fromAttr = Number(pEl.dataset.paraIdx);
+      const paraIdx =
+        Number.isInteger(fromAttr) && block.paras[fromAttr] === paraText
+          ? fromAttr
+          : block.paras.indexOf(paraText);
+      if (paraIdx === -1) {
+        setPendingSel(null);
+        return;
+      }
+      const pre = document.createRange();
+      pre.selectNodeContents(pEl);
+      pre.setEnd(clip.startContainer, clip.startOffset);
+      const offsetInPara = pre.toString().length;
+
+      let ordinal = 0;
+      for (let i = 0; i < paraIdx; i++) ordinal += countOccurrences(block.paras[i], text);
+      ordinal += countStartsBefore(paraText, text, offsetInPara);
+
+      const r = clip.getBoundingClientRect();
+      setPendingSel({
+        srcPage,
+        text,
+        ordinal,
+        rect: { top: r.top, bottom: r.bottom, centerX: r.left + r.width / 2 },
+      });
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [blockByPage]);
+
+  const addHighlight = useCallback(
+    (color: AnnotationColor, withNote: boolean) => {
+      if (!pendingSel) return;
+      const a: Annotation = {
+        id: createAnnotationId(),
+        docKey: doc.key,
+        kind: "highlight",
+        srcPage: pendingSel.srcPage,
+        text: pendingSel.text,
+        ordinal: pendingSel.ordinal,
+        color,
+        createdAt: Date.now(),
+      };
+      upsertAnnotation(a);
+      window.getSelection()?.removeAllRanges();
+      setPendingSel(null);
+      if (withNote) setEditingId(a.id);
+    },
+    [pendingSel, doc.key, upsertAnnotation],
+  );
+
+  const pageBookmark = annotations.find(
+    (a) => a.kind === "bookmark" && a.srcPage === pos.sourcePage,
+  );
+
+  const toggleBookmark = useCallback(() => {
+    if (pageBookmark) {
+      removeAnnotation(pageBookmark.id);
+      return;
+    }
+    const snippet = blockByPage.get(pos.sourcePage)?.paras[0]?.slice(0, 110) ?? "";
+    upsertAnnotation({
+      id: createAnnotationId(),
+      docKey: doc.key,
+      kind: "bookmark",
+      srcPage: pos.sourcePage,
+      text: snippet,
+      createdAt: Date.now(),
+    });
+  }, [pageBookmark, blockByPage, pos.sourcePage, doc.key, upsertAnnotation, removeAnnotation]);
+
+  const editing = editingId ? (annotations.find((a) => a.id === editingId) ?? null) : null;
+
+  // Seed the editor drafts whenever a different annotation opens.
+  useEffect(() => {
+    if (!editingId) return;
+    const a = annotations.find((x) => x.id === editingId);
+    setNoteDraft(a?.note ?? "");
+    setColorDraft(a?.color ?? "gold");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId]);
+
+  const saveEditing = useCallback(() => {
+    if (!editing) return;
+    upsertAnnotation({
+      ...editing,
+      note: noteDraft.trim() || undefined,
+      color: editing.kind === "highlight" ? colorDraft : editing.color,
+    });
+    setEditingId(null);
+  }, [editing, noteDraft, colorDraft, upsertAnnotation]);
+
+  // ---- Read-aloud (TTS) ------------------------------------------------------
+
+  const tts = useTts(blocks);
+  const ttsActive = tts.status !== "idle";
+
+  // The spoken sentence, as a stable object for the views to highlight/follow.
+  const ttsSentence = tts.sentence;
+  const ttsHighlight = useMemo<TtsHighlight | undefined>(() => {
+    return ttsSentence
+      ? {
+          srcPage: ttsSentence.srcPage,
+          paraIdx: ttsSentence.paraIdx,
+          start: ttsSentence.start,
+          end: ttsSentence.end,
+        }
+      : undefined;
+  }, [ttsSentence]);
+
+  // ---------------------------------------------------------------------------
+
+  const exportMarks = useCallback(() => {
+    const md = annotationsToMarkdown(doc.title, annotations);
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const stem =
+      doc.title
+        .replace(/[^\w\d-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60) || "book";
+    a.download = `${stem}-marks.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [doc.title, annotations]);
+
+  // ---------------------------------------------------------------------------
+
+  // Whether any slide-over panel is open — Escape closes panels first, and only
+  // clears an active search when there was nothing left to close.
+  const panelOpenRef = useRef(false);
+  useEffect(() => {
+    panelOpenRef.current = showSettings || showToc || showSearch || showMarks;
+  }, [showSettings, showToc, showSearch, showMarks]);
+  const editingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    editingIdRef.current = editingId;
+  }, [editingId]);
+
+  // Keyboard users need a way to reach the auto-hidden chrome: the first Tab
+  // press reveals it (without stealing the keystroke), then focus cycles its
+  // controls normally.
+  const chromeRef = useRef(true);
+  useEffect(() => {
+    chromeRef.current = chrome;
+  }, [chrome]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (e.key === "Tab" && !chromeRef.current) setChrome(true);
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
         e.preventDefault();
         bookRef.current?.next();
@@ -141,13 +572,20 @@ export function Reader({ doc, onExit }: Props) {
         e.preventDefault();
         bookRef.current?.prev();
       } else if (e.key === "Escape") {
+        if (editingIdRef.current) {
+          setEditingId(null);
+          return;
+        }
+        if (!panelOpenRef.current) clearSearch();
         setShowSettings(false);
         setShowToc(false);
+        setShowSearch(false);
+        setShowMarks(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [clearSearch]);
 
   const handleChange = useCallback((p: ReadingPosition) => setPos(p), []);
   const onCenterTap = useCallback(() => {
@@ -180,14 +618,15 @@ export function Reader({ doc, onExit }: Props) {
       fg,
       root: { background: oklch(bg), color: oklch(fg) },
       // Mostly opaque so the slate actually reads as its own colour; the
-      // backdrop-blur still softens whatever scrolls beneath it.
+      // backdrop-blur still softens whatever scrolls beneath it. Ink alphas
+      // are kept high enough that small chrome text clears WCAG AA on the bar.
       chrome: {
         backgroundColor: oklch(bar, 0.9),
         borderColor: oklch(ink, 0.16),
-        color: oklch(ink, 0.8),
-        "--chrome-fg": oklch(ink, 0.8),
+        color: oklch(ink, 0.9),
+        "--chrome-fg": oklch(ink, 0.9),
         "--chrome-strong": oklch(ink, 0.98),
-        "--chrome-faint": oklch(ink, 0.5),
+        "--chrome-faint": oklch(ink, 0.68),
         "--chrome-hover-bg": oklch(ink, 0.08),
       } as React.CSSProperties,
     };
@@ -201,6 +640,7 @@ export function Reader({ doc, onExit }: Props) {
     <div className="relative flex h-[100dvh] flex-col overflow-hidden" style={surface.root}>
       {/* Top bar — auto-hides while reading */}
       <header
+        inert={!chrome}
         className={`absolute inset-x-0 top-0 z-30 backdrop-blur-xl border-b transition-all duration-300 ${
           chrome ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0 pointer-events-none"
         }`}
@@ -209,6 +649,7 @@ export function Reader({ doc, onExit }: Props) {
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 max-w-[1400px] mx-auto w-full">
           <button
             onClick={onExit}
+            aria-label="Back to library"
             className="flex items-center gap-2 text-sm text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -220,6 +661,46 @@ export function Reader({ doc, onExit }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-1">
+            {tts.supported && (
+              <button
+                onClick={() => (ttsActive ? tts.stop() : tts.playFrom(pos.sourcePage))}
+                aria-pressed={ttsActive}
+                className={`p-2 rounded-md transition-colors hover:bg-[color:var(--chrome-hover-bg)] ${
+                  ttsActive
+                    ? "text-ember"
+                    : "text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)]"
+                }`}
+                aria-label={ttsActive ? "Stop reading aloud" : "Read aloud from here"}
+              >
+                <Headphones className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={toggleBookmark}
+              aria-pressed={!!pageBookmark}
+              className={`p-2 rounded-md transition-colors hover:bg-[color:var(--chrome-hover-bg)] ${
+                pageBookmark
+                  ? "text-ember"
+                  : "text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)]"
+              }`}
+              aria-label={pageBookmark ? "Remove bookmark from this page" : "Bookmark this page"}
+            >
+              <Bookmark className="w-4 h-4" fill={pageBookmark ? "currentColor" : "none"} />
+            </button>
+            <button
+              onClick={() => setShowMarks(true)}
+              className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              aria-label="Bookmarks, highlights and notes"
+            >
+              <BookMarked className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShowSearch(true)}
+              className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              aria-label="Search in book"
+            >
+              <Search className="w-4 h-4" />
+            </button>
             <button
               onClick={() => setShowToc(true)}
               className="p-2 rounded-md text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
@@ -237,7 +718,14 @@ export function Reader({ doc, onExit }: Props) {
           </div>
         </div>
         {/* Progress sliver */}
-        <div className="h-[2px] bg-border/30">
+        <div
+          className="h-[2px] bg-border/30"
+          role="progressbar"
+          aria-label="Reading progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
+        >
           <div
             className="h-full bg-gradient-to-r from-ember to-accent transition-all duration-500"
             style={{ width: `${progress}%`, boxShadow: "0 0 12px var(--ember-glow)" }}
@@ -248,31 +736,214 @@ export function Reader({ doc, onExit }: Props) {
       {/* The book — page-turn or continuous scroll. Switching modes remounts the
           view, which picks up the live reading position (pos.sourcePage) so you
           stay where you were. */}
-      {settings.readingMode === "scroll" ? (
-        <ScrollView
-          ref={bookRef}
-          doc={doc}
-          settings={settings}
-          initialSourcePage={pos.sourcePage}
-          onChange={handleChange}
-          onCenterTap={onCenterTap}
-        />
-      ) : (
-        <BookView
-          ref={bookRef}
-          doc={doc}
-          settings={settings}
-          initialSourcePage={pos.sourcePage}
-          onChange={handleChange}
-          onCenterTap={onCenterTap}
-        />
+      <div ref={bookWrapRef} className="flex min-h-0 flex-1 flex-col">
+        {settings.readingMode === "scroll" ? (
+          <ScrollView
+            ref={bookRef}
+            doc={doc}
+            settings={settings}
+            initialSourcePage={pos.sourcePage}
+            onChange={handleChange}
+            onCenterTap={onCenterTap}
+            search={searchState}
+            highlights={highlightsByPage}
+            onAnnotationTap={setEditingId}
+            tts={ttsHighlight}
+          />
+        ) : (
+          <BookView
+            ref={bookRef}
+            doc={doc}
+            settings={settings}
+            initialSourcePage={pos.sourcePage}
+            onChange={handleChange}
+            onCenterTap={onCenterTap}
+            search={searchState}
+            highlights={highlightsByPage}
+            onAnnotationTap={setEditingId}
+            tts={ttsHighlight}
+          />
+        )}
+      </div>
+
+      {/* Read-aloud player bar */}
+      {ttsActive && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-16 z-30 flex justify-center px-3">
+          <div
+            role="toolbar"
+            aria-label="Read aloud controls"
+            className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-0.5 rounded-2xl border px-2 py-1.5 text-xs backdrop-blur-xl"
+            style={surface.chrome}
+          >
+            <button
+              onClick={() => tts.skip(-1)}
+              aria-label="Previous sentence"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <SkipBack className="w-4 h-4" />
+            </button>
+            {tts.status === "playing" ? (
+              <button
+                onClick={tts.pause}
+                aria-label="Pause reading"
+                className="p-2 rounded-full text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              >
+                <Pause className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={tts.resume}
+                aria-label="Resume reading"
+                className="p-2 rounded-full text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+              >
+                <Play className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              onClick={() => tts.skip(1)}
+              aria-label="Next sentence"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <SkipForward className="w-4 h-4" />
+            </button>
+            <button
+              onClick={tts.stop}
+              aria-label="Stop reading"
+              className="p-2 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <Square className="w-3.5 h-3.5" />
+            </button>
+            <span className="mx-1 h-5 w-px bg-[color:var(--chrome-faint)] opacity-40" />
+            <label className="flex items-center gap-1 text-[color:var(--chrome-fg)]">
+              <span className="sr-only">Speech rate</span>
+              <select
+                value={tts.rate}
+                onChange={(e) => tts.setRate(parseFloat(e.target.value))}
+                aria-label="Speech rate"
+                className="bg-transparent text-xs text-[color:var(--chrome-fg)] focus:outline-none cursor-pointer"
+              >
+                {TTS_RATES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}×
+                  </option>
+                ))}
+              </select>
+            </label>
+            {tts.voices.length > 0 && (
+              <select
+                value={tts.voiceURI ?? ""}
+                onChange={(e) => tts.setVoiceURI(e.target.value || null)}
+                aria-label="Voice"
+                className="max-w-[9rem] truncate bg-transparent text-xs text-[color:var(--chrome-fg)] focus:outline-none cursor-pointer"
+              >
+                <option value="">Default voice</option>
+                {tts.voices.map((v) => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} ({v.lang})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Selection toolbar — floats by the selected text; pointer-down is
+          swallowed so tapping a swatch doesn't dissolve the selection first. */}
+      {pendingSel && (
+        <div
+          role="toolbar"
+          aria-label="Highlight selection"
+          onPointerDown={(e) => e.preventDefault()}
+          className="fixed z-40 flex items-center gap-1.5 rounded-full border border-border bg-card/95 px-2.5 py-1.5 shadow-lg backdrop-blur"
+          style={{
+            left: clamp(
+              pendingSel.rect.centerX,
+              110,
+              (typeof window !== "undefined" ? window.innerWidth : 800) - 110,
+            ),
+            top: pendingSel.rect.top > 64 ? pendingSel.rect.top - 52 : pendingSel.rect.bottom + 12,
+            transform: "translateX(-50%)",
+          }}
+        >
+          {ANNOTATION_COLORS.map((c) => (
+            <button
+              key={c}
+              onClick={() => addHighlight(c, false)}
+              aria-label={`Highlight in ${c}`}
+              className="h-6 w-6 rounded-full border border-black/20 transition-transform hover:scale-110"
+              style={{ background: COLOR_SWATCH[c] }}
+            />
+          ))}
+          <span className="mx-0.5 h-5 w-px bg-border" />
+          <button
+            onClick={() => addHighlight("gold", true)}
+            className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <StickyNote className="w-3.5 h-3.5" /> Note
+          </button>
+        </div>
+      )}
+
+      {/* Floating match stepper — visible while a search is live but its panel
+          is closed, so you can hop hit-to-hit without losing the page. */}
+      {searchState && !showSearch && (
+        <div
+          className={`pointer-events-none absolute inset-x-0 z-30 flex justify-center ${
+            ttsActive ? "bottom-32" : "bottom-16"
+          }`}
+        >
+          <div
+            className="pointer-events-auto flex items-center gap-0.5 rounded-full border px-1.5 py-1 text-xs backdrop-blur-xl"
+            style={surface.chrome}
+          >
+            <button
+              onClick={() => stepMatch(-1)}
+              disabled={!matches.length}
+              aria-label="Previous match"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 transition-colors"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <span className="px-1 tabular-nums text-[color:var(--chrome-fg)]" aria-live="polite">
+              {matches.length ? `${clampedIdx + 1} / ${matches.length}` : "0 matches"}
+            </span>
+            <button
+              onClick={() => stepMatch(1)}
+              disabled={!matches.length}
+              aria-label="Next match"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] disabled:opacity-30 transition-colors"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={clearSearch}
+              aria-label="Clear search"
+              className="p-1.5 rounded-full text-[color:var(--chrome-fg)] hover:text-[color:var(--chrome-strong)] hover:bg-[color:var(--chrome-hover-bg)] transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Transient annotation-storage notice */}
+      {annError && (
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-40 flex justify-center px-4">
+          <div
+            role="alert"
+            className="pointer-events-auto rounded-md border border-destructive/40 bg-card/95 px-4 py-2 text-sm text-destructive shadow-lg backdrop-blur"
+          >
+            {annError}
+          </div>
+        </div>
       )}
 
       {/* First-run tap hint */}
       {showHint && (
         <div
           className="pointer-events-none absolute inset-0 z-20 flex items-center justify-between px-8 text-[11px] uppercase tracking-[0.25em]"
-          style={{ color: oklch(surface.fg, 0.45) }}
+          style={{ color: oklch(surface.fg, 0.62) }}
         >
           <span>‹ prev</span>
           <span className="text-center leading-relaxed">
@@ -288,7 +959,7 @@ export function Reader({ doc, onExit }: Props) {
       {!chrome && (
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-2.5 text-[11px] tracking-wide"
-          style={{ color: oklch(surface.fg, 0.5) }}
+          style={{ color: oklch(surface.fg, 0.72) }}
         >
           <span>
             {pos.page} / {pos.total} · {Math.round(progress)}% · {minutesLeft} min left
@@ -298,6 +969,7 @@ export function Reader({ doc, onExit }: Props) {
 
       {/* Footer nav — auto-hides while reading */}
       <footer
+        inert={!chrome}
         className={`absolute inset-x-0 bottom-0 z-30 backdrop-blur-xl border-t transition-all duration-300 ${
           chrome ? "translate-y-0 opacity-100" : "translate-y-full opacity-0 pointer-events-none"
         }`}
@@ -327,240 +999,560 @@ export function Reader({ doc, onExit }: Props) {
 
       {/* Settings panel */}
       {showSettings && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowSettings(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-0 top-0 h-full w-full sm:w-96 bg-card border-l border-border p-6 overflow-y-auto ember-glow"
-          >
-            <div className="flex items-center justify-between mb-8">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">Reader</h3>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <SettingGroup label="Layout">
-              <div className="grid grid-cols-2 gap-2">
-                {READING_MODES.map(({ id, label, icon: Icon }) => {
-                  const active = settings.readingMode === id;
-                  return (
-                    <button
-                      key={id}
-                      onClick={() => setSettings({ ...settings, readingMode: id })}
-                      aria-pressed={active}
-                      className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
-                        active
-                          ? "border-ember text-ember ember-glow"
-                          : "border-border text-muted-foreground hover:border-ember/40"
-                      }`}
-                    >
-                      <Icon className="w-3.5 h-3.5 shrink-0" />
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingGroup>
-
-            <SettingGroup label="Theme">
-              <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(THEMES) as ReaderTheme[]).map((t) => {
-                  const { label, icon: Icon, bg, fg } = THEMES[t];
-                  const active = settings.theme === t;
-                  return (
-                    <button
-                      key={t}
-                      onClick={() => setSettings({ ...settings, theme: t })}
-                      className={`flex items-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
-                        active
-                          ? "border-ember text-ember ember-glow"
-                          : "border-border text-muted-foreground hover:border-ember/40"
-                      }`}
-                    >
-                      <span
-                        className="grid place-items-center w-6 h-6 rounded-full shrink-0 border border-black/10"
-                        style={{ background: oklch(bg), color: oklch(fg) }}
-                      >
-                        <Icon className="w-3 h-3" />
-                      </span>
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingGroup>
-
-            <SettingGroup label="Font">
-              <div className="grid grid-cols-2 gap-2">
-                {FONT_OPTIONS.map((f) => (
+        <SlideOver
+          title="Reader"
+          side="right"
+          className="ember-glow"
+          onClose={() => setShowSettings(false)}
+        >
+          <SettingGroup label="Layout">
+            <div className="grid grid-cols-2 gap-2">
+              {READING_MODES.map(({ id, label, icon: Icon }) => {
+                const active = settings.readingMode === id;
+                return (
                   <button
-                    key={f.id}
-                    onClick={() => setSettings({ ...settings, fontFamily: f.id })}
-                    className={`py-3 rounded-md border text-sm transition-all ${
-                      settings.fontFamily === f.id
-                        ? "border-ember text-ember"
+                    key={id}
+                    onClick={() => setSettings({ ...settings, readingMode: id })}
+                    aria-pressed={active}
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
+                      active
+                        ? "border-ember text-ember ember-glow"
                         : "border-border text-muted-foreground hover:border-ember/40"
                     }`}
-                    style={{ fontFamily: FONT_VARS[f.id] }}
                   >
-                    {f.label}
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    {label}
                   </button>
-                ))}
-              </div>
-            </SettingGroup>
+                );
+              })}
+            </div>
+          </SettingGroup>
 
+          <SettingGroup label="Theme">
+            <div className="grid grid-cols-2 gap-2">
+              {(Object.keys(THEMES) as ReaderTheme[]).map((t) => {
+                const { label, icon: Icon, bg, fg } = THEMES[t];
+                const active = settings.theme === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setSettings({ ...settings, theme: t })}
+                    aria-pressed={active}
+                    className={`flex items-center gap-2 py-2.5 px-3 rounded-md border text-xs uppercase tracking-wider transition-all ${
+                      active
+                        ? "border-ember text-ember ember-glow"
+                        : "border-border text-muted-foreground hover:border-ember/40"
+                    }`}
+                  >
+                    <span
+                      className="grid place-items-center w-6 h-6 rounded-full shrink-0 border border-black/10"
+                      style={{ background: oklch(bg), color: oklch(fg) }}
+                    >
+                      <Icon className="w-3 h-3" />
+                    </span>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingGroup>
+
+          <SettingGroup label="Font">
+            <div className="grid grid-cols-2 gap-2">
+              {FONT_OPTIONS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setSettings({ ...settings, fontFamily: f.id })}
+                  aria-pressed={settings.fontFamily === f.id}
+                  className={`py-3 rounded-md border text-sm transition-all ${
+                    settings.fontFamily === f.id
+                      ? "border-ember text-ember"
+                      : "border-border text-muted-foreground hover:border-ember/40"
+                  }`}
+                  style={{ fontFamily: FONT_VARS[f.id] }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </SettingGroup>
+
+          <SettingSlider
+            label="Font size"
+            value={settings.fontSize}
+            min={14}
+            max={28}
+            step={1}
+            suffix="px"
+            onChange={(v) => setSettings({ ...settings, fontSize: v })}
+          />
+          <SettingSlider
+            label="Line height"
+            value={settings.lineHeight}
+            min={1.3}
+            max={2.2}
+            step={0.05}
+            onChange={(v) => setSettings({ ...settings, lineHeight: v })}
+          />
+          <SettingSlider
+            label="Line width"
+            value={settings.measure}
+            min={45}
+            max={90}
+            step={1}
+            suffix=" char"
+            onChange={(v) => setSettings({ ...settings, measure: v })}
+          />
+          <SettingSlider
+            label="Brightness"
+            value={settings.brightness}
+            min={0.85}
+            max={1.15}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => setSettings({ ...settings, brightness: v })}
+          />
+          <SettingSlider
+            label="Side margin"
+            value={settings.margin}
+            min={0}
+            max={80}
+            step={4}
+            suffix="px"
+            onChange={(v) => setSettings({ ...settings, margin: v })}
+          />
+          {settings.paragraphStyle === "spaced" && (
             <SettingSlider
-              label="Font size"
-              value={settings.fontSize}
-              min={14}
-              max={28}
-              step={1}
-              suffix="px"
-              onChange={(v) => setSettings({ ...settings, fontSize: v })}
-            />
-            <SettingSlider
-              label="Line height"
-              value={settings.lineHeight}
-              min={1.3}
-              max={2.2}
-              step={0.05}
-              onChange={(v) => setSettings({ ...settings, lineHeight: v })}
-            />
-            <SettingSlider
-              label="Line width"
-              value={settings.measure}
-              min={45}
-              max={90}
-              step={1}
-              suffix=" char"
-              onChange={(v) => setSettings({ ...settings, measure: v })}
-            />
-            <SettingSlider
-              label="Brightness"
-              value={settings.brightness}
-              min={0.85}
-              max={1.15}
-              step={0.01}
-              format={(v) => `${Math.round(v * 100)}%`}
-              onChange={(v) => setSettings({ ...settings, brightness: v })}
-            />
-            <SettingSlider
-              label="Side margin"
-              value={settings.margin}
-              min={0}
-              max={80}
-              step={4}
-              suffix="px"
-              onChange={(v) => setSettings({ ...settings, margin: v })}
-            />
-            {settings.paragraphStyle === "spaced" && (
-              <SettingSlider
-                label="Paragraph spacing"
-                value={settings.paragraphSpacing}
-                min={0.4}
-                max={2.5}
-                step={0.1}
-                suffix="em"
-                onChange={(v) => setSettings({ ...settings, paragraphSpacing: v })}
-              />
-            )}
-            <SettingSlider
-              label="Letter spacing"
-              value={settings.letterSpacing}
-              min={-0.02}
-              max={0.12}
-              step={0.01}
+              label="Paragraph spacing"
+              value={settings.paragraphSpacing}
+              min={0.4}
+              max={2.5}
+              step={0.1}
               suffix="em"
-              onChange={(v) => setSettings({ ...settings, letterSpacing: v })}
+              onChange={(v) => setSettings({ ...settings, paragraphSpacing: v })}
             />
+          )}
+          <SettingSlider
+            label="Letter spacing"
+            value={settings.letterSpacing}
+            min={-0.02}
+            max={0.12}
+            step={0.01}
+            suffix="em"
+            onChange={(v) => setSettings({ ...settings, letterSpacing: v })}
+          />
 
-            <SettingGroup label="Text">
-              <div className="space-y-2">
-                <SettingToggle
-                  label="Indent paragraphs"
-                  checked={settings.paragraphStyle === "indented"}
-                  onChange={(v) =>
-                    setSettings({ ...settings, paragraphStyle: v ? "indented" : "spaced" })
-                  }
-                />
-                <SettingToggle
-                  label="Justify text"
-                  checked={settings.justify}
-                  onChange={(v) => setSettings({ ...settings, justify: v })}
-                />
-                <SettingToggle
-                  label="Hyphenation"
-                  checked={settings.hyphens}
-                  onChange={(v) => setSettings({ ...settings, hyphens: v })}
-                />
-              </div>
-            </SettingGroup>
-          </div>
-        </div>
+          <SettingGroup label="Text">
+            <div className="space-y-2">
+              <SettingToggle
+                label="Indent paragraphs"
+                checked={settings.paragraphStyle === "indented"}
+                onChange={(v) =>
+                  setSettings({ ...settings, paragraphStyle: v ? "indented" : "spaced" })
+                }
+              />
+              <SettingToggle
+                label="Justify text"
+                checked={settings.justify}
+                onChange={(v) => setSettings({ ...settings, justify: v })}
+              />
+              <SettingToggle
+                label="Hyphenation"
+                checked={settings.hyphens}
+                onChange={(v) => setSettings({ ...settings, hyphens: v })}
+              />
+            </div>
+          </SettingGroup>
+        </SlideOver>
       )}
 
       {/* TOC panel */}
       {showToc && (
-        <div className="fixed inset-0 z-40" onClick={() => setShowToc(false)}>
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute left-0 top-0 h-full w-full sm:w-96 bg-card border-r border-border p-6 overflow-y-auto"
-          >
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">
-                Contents
-              </h3>
+        <SlideOver title="Contents" side="left" onClose={() => setShowToc(false)}>
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search sections..."
+              className="w-full bg-input/50 border border-border rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-ember"
+            />
+          </div>
+          <ul className="space-y-1">
+            {filteredOutline.map((item, i) => (
+              <li key={i}>
+                <button
+                  onClick={() => {
+                    bookRef.current?.goToSourcePage(item.pageNumber);
+                    setShowToc(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
+                    pos.sourcePage === item.pageNumber
+                      ? "bg-ember/10 text-ember"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  <span
+                    className="truncate"
+                    style={{
+                      paddingLeft: `${(item.title.match(/^\s*/)?.[0].length || 0) * 4}px`,
+                    }}
+                  >
+                    {item.title.trim()}
+                  </span>
+                  <span className="text-xs opacity-70 shrink-0">{item.pageNumber}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SlideOver>
+      )}
+
+      {/* Full-text search panel */}
+      {showSearch && (
+        <SlideOver title="Search" side="right" onClose={() => setShowSearch(false)}>
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input
+              data-autofocus
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && matches.length) {
+                  goToMatch(clampedIdx);
+                  setShowSearch(false);
+                }
+              }}
+              placeholder="Search the whole book..."
+              aria-label="Search the whole book"
+              className="w-full bg-input/50 border border-border rounded-md pl-9 pr-8 py-2 text-sm focus:outline-none focus:border-ember"
+            />
+            {searchInput && (
               <button
-                onClick={() => setShowToc(false)}
-                className="text-muted-foreground hover:text-foreground"
+                onClick={clearSearch}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5" />
               </button>
+            )}
+          </div>
+
+          {needle.length >= MIN_QUERY && (
+            <div className="mb-4 flex items-center justify-between text-xs text-muted-foreground">
+              <span aria-live="polite">
+                {matches.length
+                  ? `${matches.length}${matches.length >= SEARCH_LIMIT ? "+" : ""} matches`
+                  : "No matches"}
+              </span>
+              {matches.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <button
+                    onClick={() => stepMatch(-1)}
+                    aria-label="Previous match"
+                    className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="tabular-nums">
+                    {clampedIdx + 1} / {matches.length}
+                  </span>
+                  <button
+                    onClick={() => stepMatch(1)}
+                    aria-label="Next match"
+                    className="p-1.5 rounded-md hover:bg-muted/40 hover:text-foreground transition-colors"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              )}
             </div>
-            <div className="relative mb-4">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search sections..."
-                className="w-full bg-input/50 border border-border rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-ember"
-              />
-            </div>
-            <ul className="space-y-1">
-              {filteredOutline.map((item, i) => (
-                <li key={i}>
+          )}
+
+          <ul className="space-y-1">
+            {matches.map((m, i) => (
+              <li key={i}>
+                <button
+                  onClick={() => {
+                    goToMatch(i);
+                    setShowSearch(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                    i === clampedIdx
+                      ? "bg-ember/10 text-foreground"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  <span className="block text-[11px] opacity-70 mb-0.5">Page {m.srcPage}</span>
+                  <span className="block leading-snug">
+                    {m.before}
+                    <mark data-search="true">{m.match}</mark>
+                    {m.after}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </SlideOver>
+      )}
+
+      {/* Marks panel — bookmarks, highlights, notes */}
+      {showMarks && (
+        <SlideOver
+          title="Marks"
+          side="right"
+          onClose={() => setShowMarks(false)}
+          headerExtra={
+            annotations.length > 0 ? (
+              <button
+                onClick={exportMarks}
+                className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                aria-label="Export annotations as Markdown"
+                title="Export as Markdown"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            ) : undefined
+          }
+        >
+          {annotations.length === 0 ? (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Nothing marked yet. Tap the bookmark icon to mark a page, or select text to highlight
+              it and attach a note.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {annotations.map((a) => (
+                <li
+                  key={a.id}
+                  className="group rounded-md border border-border/60 hover:border-ember/40 transition-colors"
+                >
                   <button
                     onClick={() => {
-                      bookRef.current?.goToSourcePage(item.pageNumber);
-                      setShowToc(false);
+                      bookRef.current?.goToSourcePage(a.srcPage);
+                      setShowMarks(false);
                     }}
-                    className={`w-full text-left px-3 py-2 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
-                      pos.sourcePage === item.pageNumber
-                        ? "bg-ember/10 text-ember"
-                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                    }`}
+                    className="w-full text-left px-3 pt-2.5 pb-1"
                   >
-                    <span
-                      className="truncate"
-                      style={{
-                        paddingLeft: `${(item.title.match(/^\s*/)?.[0].length || 0) * 4}px`,
-                      }}
-                    >
-                      {item.title.trim()}
+                    <span className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                      {a.kind === "bookmark" ? (
+                        <Bookmark className="w-3 h-3 text-ember" fill="currentColor" />
+                      ) : (
+                        <span
+                          className="h-3 w-3 rounded-full border border-black/20"
+                          style={{ background: COLOR_SWATCH[a.color ?? "gold"] }}
+                        />
+                      )}
+                      {a.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {a.srcPage}
                     </span>
-                    <span className="text-xs opacity-50 shrink-0">{item.pageNumber}</span>
+                    <span className="block text-sm leading-snug line-clamp-2">
+                      {a.text || "(page bookmark)"}
+                    </span>
+                    {a.note && (
+                      <span className="mt-1 block text-xs italic text-muted-foreground line-clamp-2">
+                        {a.note}
+                      </span>
+                    )}
                   </button>
+                  <div className="flex justify-end gap-1 px-2 pb-1.5">
+                    <button
+                      onClick={() => setEditingId(a.id)}
+                      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                      aria-label={a.note ? "Edit note" : "Add note"}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => removeAnnotation(a.id)}
+                      className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-muted/40 transition-colors"
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
+          )}
+        </SlideOver>
+      )}
+
+      {/* Annotation editor — note + color + delete */}
+      {editing && (
+        <ModalDialog
+          label={`Edit ${editing.kind} on page ${editing.srcPage}`}
+          onClose={() => setEditingId(null)}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-display text-sm uppercase tracking-[0.2em] text-ember">
+              {editing.kind === "bookmark" ? "Bookmark" : "Highlight"} · p. {editing.srcPage}
+            </h3>
+            <button
+              onClick={() => setEditingId(null)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Close editor"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {editing.text && (
+            <p className="mb-4 border-l-2 border-ember/40 pl-3 text-sm italic text-muted-foreground line-clamp-3">
+              {editing.text}
+            </p>
+          )}
+
+          {editing.kind === "highlight" && (
+            <div className="mb-4 flex items-center gap-2">
+              {ANNOTATION_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColorDraft(c)}
+                  aria-label={`Color ${c}`}
+                  aria-pressed={colorDraft === c}
+                  className={`h-7 w-7 rounded-full border transition-transform hover:scale-110 ${
+                    colorDraft === c ? "border-foreground scale-110" : "border-black/20"
+                  }`}
+                  style={{ background: COLOR_SWATCH[c] }}
+                />
+              ))}
+            </div>
+          )}
+
+          <textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            placeholder="Add a note..."
+            rows={4}
+            data-autofocus
+            aria-label="Note"
+            className="w-full bg-input/50 border border-border rounded-md p-3 text-sm focus:outline-none focus:border-ember resize-none"
+          />
+
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              onClick={() => removeAnnotation(editing.id)}
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setEditingId(null)}
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditing}
+                className="rounded-md border border-ember bg-ember/10 px-4 py-1.5 text-sm text-ember hover:bg-ember/20 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </ModalDialog>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Accessible slide-over panel: WAI-ARIA dialog semantics, focus trapped while
+ * open and restored to the opener on close, Esc/backdrop-click to dismiss.
+ */
+function SlideOver({
+  title,
+  side,
+  onClose,
+  children,
+  className = "",
+  headerExtra,
+}: {
+  title: string;
+  side: "left" | "right";
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+  headerExtra?: React.ReactNode;
+}) {
+  const trapRef = useFocusTrap<HTMLDivElement>();
+  return (
+    <div
+      className="fixed inset-0 z-40"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" aria-hidden="true" />
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className={`absolute top-0 h-full w-full sm:w-96 bg-card p-6 overflow-y-auto border-border ${
+          side === "left" ? "left-0 border-r" : "right-0 border-l"
+        } ${className}`}
+      >
+        <div className="mb-6 flex items-center justify-between">
+          <h3 className="font-display text-lg uppercase tracking-[0.2em] text-ember">{title}</h3>
+          <div className="flex items-center gap-1">
+            {headerExtra}
+            <button
+              onClick={onClose}
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground"
+              aria-label={`Close ${title.toLowerCase()}`}
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
-      )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Accessible centered modal: dialog semantics + focus trap + Esc to close. */
+function ModalDialog({
+  label,
+  onClose,
+  children,
+}: {
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const trapRef = useFocusTrap<HTMLDivElement>();
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-md rounded-lg border border-border bg-card p-5 ember-glow"
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -642,6 +1634,7 @@ function SettingSlider({
         max={max}
         step={step}
         value={value}
+        aria-label={label}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-ember"
       />

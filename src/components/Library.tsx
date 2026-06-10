@@ -1,13 +1,16 @@
-import { useMemo, useState } from "react";
-import { Lock, BookOpen, Type, Pencil, Trash2, Check, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Lock, BookOpen, Type, Pencil, Trash2, Check, X, Download } from "lucide-react";
 import { loadProgress, type CachedDoc } from "@/lib/reader-store";
+import type { ImportProgress } from "./App";
 import { DropZone } from "./DropZone";
 import { Mockingjay } from "./Mockingjay";
 
 interface Props {
   docs: CachedDoc[];
+  /** Bookmark/highlight/note counts per doc key, for the shelf badges. */
+  annCounts: Map<string, number>;
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
@@ -22,10 +25,47 @@ interface ShelfItem {
   pct: number;
   finished: boolean;
   lastOpened: number;
+  marks: number;
+}
+
+/** Chromium's install-prompt event (not yet in lib.dom). */
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+/**
+ * "Add to Home Screen" support: stash the deferred beforeinstallprompt event
+ * and expose an explicit install action for the nav button.
+ */
+function useInstallPrompt() {
+  const [evt, setEvt] = useState<BeforeInstallPromptEvent | null>(null);
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setEvt(e as BeforeInstallPromptEvent);
+    };
+    const onInstalled = () => setEvt(null);
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+  return {
+    available: !!evt,
+    install: async () => {
+      if (!evt) return;
+      setEvt(null);
+      await evt.prompt();
+    },
+  };
 }
 
 export function Library({
   docs,
+  annCounts,
   loading,
   progress,
   error,
@@ -35,6 +75,8 @@ export function Library({
   onRemove,
   onRename,
 }: Props) {
+  const installer = useInstallPrompt();
+
   // Build view models (progress + last-opened) and sort by most recent.
   const items = useMemo<ShelfItem[]>(() => {
     return docs
@@ -48,10 +90,11 @@ export function Library({
           pct,
           finished: pct >= 100,
           lastOpened: prog?.updatedAt ?? doc.savedAt,
+          marks: annCounts.get(doc.key) ?? 0,
         };
       })
       .sort((a, b) => b.lastOpened - a.lastOpened);
-  }, [docs]);
+  }, [docs, annCounts]);
 
   const continueItem = items.find((it) => it.pct > 0 && !it.finished) ?? null;
 
@@ -75,9 +118,19 @@ export function Library({
           <Mockingjay className="w-7 h-7 pin-glow" />
           <span className="font-serif text-xl font-semibold tracking-wide">WeReadPDF</span>
         </div>
-        <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          <Lock className="w-3 h-3" /> District-local
-        </span>
+        <div className="flex items-center gap-4">
+          {installer.available && (
+            <button
+              onClick={installer.install}
+              className="flex items-center gap-1.5 rounded-md border border-ember/40 px-3 py-1.5 text-xs uppercase tracking-[0.15em] text-ember hover:bg-ember/10 transition-colors"
+            >
+              <Download className="w-3 h-3" /> Install app
+            </button>
+          )}
+          <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            <Lock className="w-3 h-3" /> District-local
+          </span>
+        </div>
       </nav>
 
       {items.length === 0 ? (
@@ -130,7 +183,7 @@ function Shelf({
   items: ShelfItem[];
   continueItem: ShelfItem | null;
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
@@ -246,8 +299,9 @@ function BookCard({
           {item.doc.author && !editing && (
             <p className="mt-1 truncate text-xs text-muted-foreground">by {item.doc.author}</p>
           )}
-          <p className="mt-1 text-[11px] text-muted-foreground/70">
+          <p className="mt-1 text-[11px] text-muted-foreground">
             {item.pages} {item.pages === 1 ? "page" : "pages"} · {relativeTime(item.lastOpened)}
+            {item.marks > 0 && ` · ${item.marks} ${item.marks === 1 ? "mark" : "marks"}`}
           </p>
         </div>
       </button>
@@ -378,7 +432,7 @@ function EmptyState({
   onFile,
 }: {
   loading: boolean;
-  progress: { loaded: number; total: number };
+  progress: ImportProgress;
   error: string | null;
   warning: string | null;
   onFile: (f: File) => void;
@@ -413,7 +467,7 @@ function EmptyState({
 
         {warning && <p className="mt-4 text-sm text-amber-400/80 text-center">{warning}</p>}
 
-        <p className="mt-6 text-xs text-muted-foreground/60 tracking-wide">
+        <p className="mt-6 text-xs text-muted-foreground tracking-wide">
           Files never leave your device. No upload. No account. No trace.
         </p>
       </section>

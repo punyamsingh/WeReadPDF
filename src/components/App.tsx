@@ -1,16 +1,29 @@
 import { useEffect, useState } from "react";
-import { extractPdf } from "@/lib/pdf-extract";
+import { extractPdf, type ExtractPhase } from "@/lib/pdf-extract";
 import { saveDoc, listDocs, deleteDoc, renameDoc, type CachedDoc } from "@/lib/reader-store";
+import { countAnnotationsByDoc } from "@/lib/annotations";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
+
+export interface ImportProgress {
+  loaded: number;
+  total: number;
+  phase: ExtractPhase;
+}
 
 export function App() {
   const [docs, setDocs] = useState<CachedDoc[]>([]);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState({ loaded: 0, total: 0 });
+  const [progress, setProgress] = useState<ImportProgress>({
+    loaded: 0,
+    total: 0,
+    phase: "extract",
+  });
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+
+  const [annCounts, setAnnCounts] = useState<Map<string, number>>(new Map());
 
   // Hydrate the shelf from IndexedDB on first load.
   useEffect(() => {
@@ -18,6 +31,15 @@ export function App() {
       .then(setDocs)
       .catch(() => {});
   }, []);
+
+  // Annotation counts for the shelf badges — refreshed whenever the reader
+  // closes, since marks are made while reading.
+  useEffect(() => {
+    if (openKey) return;
+    countAnnotationsByDoc()
+      .then(setAnnCounts)
+      .catch(() => {});
+  }, [openKey]);
 
   async function handleFile(file: File) {
     if (!file || file.type !== "application/pdf") {
@@ -27,9 +49,11 @@ export function App() {
     setError(null);
     setWarning(null);
     setLoading(true);
-    setProgress({ loaded: 0, total: 0 });
+    setProgress({ loaded: 0, total: 0, phase: "extract" });
     try {
-      const extracted = await extractPdf(file, (loaded, total) => setProgress({ loaded, total }));
+      const extracted = await extractPdf(file, (loaded, total, phase) =>
+        setProgress({ loaded, total, phase: phase ?? "extract" }),
+      );
       const cached: CachedDoc = {
         key: `${file.name}-${file.size}`,
         title: extracted.title,
@@ -51,7 +75,9 @@ export function App() {
       setOpenKey(cached.key);
     } catch (e) {
       console.error(e);
-      setError("Could not read this PDF. It may be encrypted or scanned.");
+      setError(
+        "Could not pull any text out of this PDF. It may be encrypted, or a scan the OCR couldn't decipher.",
+      );
     } finally {
       setLoading(false);
     }
@@ -85,6 +111,7 @@ export function App() {
   return (
     <Library
       docs={docs}
+      annCounts={annCounts}
       loading={loading}
       progress={progress}
       error={error}

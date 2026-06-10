@@ -11,12 +11,36 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, deriveTitles } from "@/lib/book-content";
+import type { PlacedRange } from "@/lib/annotations";
+import { renderBlock } from "./highlight";
+
+/** Resolved highlight ranges: source page → paragraph index → ranges. */
+export type HighlightsByPage = Map<number, Map<number, PlacedRange[]>>;
 
 /** Imperative handle the surrounding chrome (footer, keyboard, TOC) drives. */
 export interface BookApi {
   next: () => void;
   prev: () => void;
   goToSourcePage: (sourcePage: number) => void;
+}
+
+/** The sentence currently being read aloud, for highlighting + page-following. */
+export interface TtsHighlight {
+  srcPage: number;
+  paraIdx: number;
+  start: number;
+  end: number;
+}
+
+/** Live in-book search state the reader chrome feeds the views. */
+export interface SearchState {
+  /** Lowercased needle; every occurrence in the body gets a `<mark>`. */
+  term: string;
+  /** The match currently stepped to (page + per-page ordinal), if any. */
+  active: { srcPage: number; ordinal: number } | null;
+  /** Bumped on every explicit jump (result tap / next / prev) — views only
+   *  navigate on a token change, never on mere re-renders or typing. */
+  navToken: number;
 }
 
 export interface ReadingPosition {
@@ -37,6 +61,14 @@ interface Props {
   onChange: (pos: ReadingPosition) => void;
   /** Fired on a center tap — used to toggle the chrome. */
   onCenterTap: () => void;
+  /** In-book search: highlights every hit and navigates on navToken bumps. */
+  search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
+  /** Fired when a highlight mark is tapped (open its editor). */
+  onAnnotationTap?: (id: string) => void;
+  /** Sentence being read aloud — highlighted and kept in view. */
+  tts?: TtsHighlight | null;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -134,6 +166,9 @@ function FlowContent({
   colContentH,
   chunkFirstSrcPage,
   globalFirstSrcPage,
+  search,
+  highlights,
+  tts,
 }: {
   blocks: Block[];
   settings: ReaderSettings;
@@ -147,6 +182,12 @@ function FlowContent({
   chunkFirstSrcPage: number;
   /** First page of the whole book; gets no title card and no opening indent. */
   globalFirstSrcPage: number;
+  /** Active in-book search to mark up in the body text. */
+  search?: SearchState;
+  /** Reader highlights to paint into the body text. */
+  highlights?: HighlightsByPage;
+  /** Sentence being read aloud. */
+  tts?: TtsHighlight | null;
 }) {
   const indented = settings.paragraphStyle === "indented";
   return (
@@ -154,6 +195,26 @@ function FlowContent({
       {blocks.map((b) => {
         const title = titleForSrc.get(b.srcPage);
         const isChapter = chapterStarts.has(b.srcPage);
+        // Paint search hits, reader highlights and the spoken sentence into the
+        // paragraphs; the ordinal threading keeps the page's Nth mark aligned
+        // with the Nth match.
+        const pageRanges = highlights?.get(b.srcPage);
+        const blockTts = tts?.srcPage === b.srcPage ? tts : null;
+        const paraNodes =
+          search?.term || pageRanges || blockTts
+            ? renderBlock(
+                b.paras,
+                search?.term
+                  ? {
+                      term: search.term,
+                      activeOrdinal:
+                        search.active?.srcPage === b.srcPage ? search.active.ordinal : null,
+                    }
+                  : null,
+                pageRanges,
+                blockTts,
+              )
+            : b.paras;
         // A chapter gets its own centered title page when it has a usable title,
         // isn't the book's first page, and we've measured the column height.
         const showCard =
@@ -236,9 +297,10 @@ function FlowContent({
                 }}
               />
             )}
-            {b.paras.map((para, i) => (
+            {paraNodes.map((para, i) => (
               <p
                 key={i}
+                data-para-idx={i}
                 style={{
                   marginTop: 0,
                   marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,
@@ -278,7 +340,17 @@ type Entry = "start" | "end" | "anchor";
  * measured.
  */
 export const BookView = forwardRef<BookApi, Props>(function BookView(
-  { doc, settings, initialSourcePage, onChange, onCenterTap },
+  {
+    doc,
+    settings,
+    initialSourcePage,
+    onChange,
+    onCenterTap,
+    search,
+    highlights,
+    onAnnotationTap,
+    tts,
+  },
   ref,
 ) {
   const blocks = useMemo(() => buildBlocks(doc), [doc]);
@@ -546,6 +618,52 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
   useImperativeHandle(ref, () => ({ next, prev, goToSourcePage }), [next, prev, goToSourcePage]);
 
+  // An explicit search jump (result tap / next / prev) lands on the match's
+  // page; the layout pass below then narrows to the exact screen of the mark.
+  useEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    goToSourcePage(search.active.srcPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken]);
+
+  // After the chunk holding the active match is laid out, page precisely to the
+  // screen its <mark> sits on (a long source page can span several screens).
+  useLayoutEffect(() => {
+    if (!search?.navToken || !search.active) return;
+    const vp = viewportRef.current;
+    const content = contentRef.current;
+    if (!vp || !content) return;
+    const W = vp.clientWidth;
+    if (W <= 0) return;
+    const el = content.querySelector<HTMLElement>('mark[data-search][data-active="true"]');
+    if (!el) return;
+    const screen = Math.max(0, Math.min(Math.floor(el.offsetLeft / W), localTotalRef.current - 1));
+    jumpRef.current = true;
+    setLocalPage(screen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search?.navToken, currentChunk, localTotal]);
+
+  // Read-aloud follows the narrator: keep the screen holding the spoken
+  // sentence in view, turning pages (and crossing chunks) as speech advances.
+  useEffect(() => {
+    if (!tts) return;
+    const vp = viewportRef.current;
+    const content = contentRef.current;
+    if (!vp || !content) return;
+    const el = content.querySelector<HTMLElement>("mark[data-tts]");
+    if (!el) {
+      // The sentence lives in another chunk — jump there; the re-run after
+      // layout finds the mark and settles on the exact screen.
+      goToSourcePage(tts.srcPage);
+      return;
+    }
+    const W = vp.clientWidth;
+    if (W <= 0) return;
+    const screen = Math.max(0, Math.min(Math.floor(el.offsetLeft / W), localTotalRef.current - 1));
+    if (screen !== localPageRef.current) setLocalPage(screen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tts, currentChunk, localTotal]);
+
   const turn = useCallback((delta: number) => (delta > 0 ? next() : prev()), [next, prev]);
 
   // Tap zones + swipe, without stealing text selection.
@@ -570,6 +688,12 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
       return;
     }
     if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && dt < 500) {
+      // A tap on a highlight opens its editor instead of turning the page.
+      const mark = (e.target as HTMLElement).closest?.("mark[data-annotation-id]");
+      if (mark instanceof HTMLElement && mark.dataset.annotationId) {
+        onAnnotationTap?.(mark.dataset.annotationId);
+        return;
+      }
       const x = e.clientX - (rect?.left ?? 0);
       if (x < W * 0.3) turn(-1);
       else if (x > W * 0.7) turn(1);
@@ -621,6 +745,9 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
           colContentH={colContentH}
           chunkFirstSrcPage={chunk?.firstSrcPage ?? 0}
           globalFirstSrcPage={blocks[0]?.srcPage ?? 0}
+          search={search}
+          highlights={highlights}
+          tts={tts}
         />
       </div>
     </div>
