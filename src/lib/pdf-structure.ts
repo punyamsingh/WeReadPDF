@@ -152,6 +152,7 @@ export interface MarkedItem {
   hasEOL?: boolean;
 }
 
+/** Map a structure-tree role to a heading level (H1–H6/Title), or 0 if not a heading. */
 const headingLevelOf = (role?: string): number => {
   if (!role) return 0;
   if (role === "Title") return 1;
@@ -194,6 +195,10 @@ function buildMarkedContentText(items: MarkedItem[]): Map<string, string> {
   return map;
 }
 
+/**
+ * Concatenate the glyph text beneath a structure node by resolving its leaf
+ * content ids through the marked-content map, recursing into child nodes.
+ */
 function collectStructText(node: StructTreeNode, idText: Map<string, string>): string {
   let out = "";
   for (const child of node.children ?? []) {
@@ -270,6 +275,7 @@ export function finalizeStructHeadings(
 // Typography classifier (the universal fallback)
 // ---------------------------------------------------------------------------
 
+/** Reject lines that can't be a heading: too few letters, too long, or sentence-like. */
 const isHeadingText = (text: string): boolean => {
   const letters = text.replace(/[^\p{L}]/gu, "").length;
   if (letters < 2) return false; // need real words, not "•" or "12."
@@ -371,6 +377,11 @@ export function detectHeadingsByTypography(pageLines: LineLike[][]): HeadingCand
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+/**
+ * Normalize a heading candidate into a StructureNode, refining its kind from
+ * the text (front/back matter, appendix) and deepening section → subsection for
+ * unnumbered headings that nonetheless sit at level 2 or below.
+ */
 const toNode = (
   c: HeadingCandidate,
   source: StructureSource,
@@ -528,6 +539,7 @@ export function structureToOutline(
 const JUNK_TITLE = /\.(eps|pdf|docx?|tex|png|jpe?g|tiff?|gif|svg)$/i;
 const ASSET_TITLE = /^(gr|fig|figure|image|img|graphic|untitled)[\s_-]*\d*$/i;
 
+/** True when a string is plausibly a real title (not producer junk or an asset name). */
 const looksLikeTitle = (s?: string): boolean => {
   if (!s) return false;
   const t = s.trim();

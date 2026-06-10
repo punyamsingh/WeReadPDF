@@ -1216,7 +1216,7 @@ export function Reader({ doc, onExit }: Props) {
                 >
                   <span
                     className="truncate flex items-center gap-2"
-                    style={{ paddingLeft: `${(item.level - 1) * 12}px` }}
+                    style={{ paddingLeft: `${Math.max(0, item.level - 1) * 12}px` }}
                   >
                     {item.kind && item.kind !== "section" && item.kind !== "subsection" && (
                       <span className="text-[10px] uppercase tracking-wide opacity-50 shrink-0">

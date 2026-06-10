@@ -182,6 +182,11 @@ interface Gutter {
   end: number;
 }
 
+/**
+ * Reconstruct a page's lines in reading order: column-aware when a multi-column
+ * layout is detected, otherwise following the content-stream order (which keeps
+ * superscripts and the like in place).
+ */
 function buildPageLines(items: TextItemLike[], styles?: FontStyles): Line[] {
   const placed = collectItems(items, styles);
   const split = splitColumns(placed, detectGutters(placed));
@@ -193,6 +198,11 @@ function buildPageLines(items: TextItemLike[], styles?: FontStyles): Line[] {
 const itemSize = (t: number[], fallback?: number) =>
   Math.hypot(t[2] ?? 0, t[3] ?? 0) || fallback || 10;
 
+/**
+ * Resolve raw pdf.js text items into placed items carrying page geometry plus
+ * the font size and bold weight the heading detector needs. Blank items are
+ * dropped.
+ */
 function collectItems(items: TextItemLike[], styles?: FontStyles): PlacedItem[] {
   const out: PlacedItem[] = [];
   for (const it of items) {
