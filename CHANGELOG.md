@@ -1,3 +1,11 @@
+## [1.3.1](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.0...v1.3.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* default to the paginated page-turn view on all devices ([b9c605e](https://github.com/punyamsingh/WeReadPDF/commit/b9c605e0a98629f68a69e9fc481f9e09d4e879b7))
+* use the Mockingjay as the tab icon and tighten the tab title ([99314b4](https://github.com/punyamsingh/WeReadPDF/commit/99314b47c4ff6a11674490c453f8ead87f850ee6))
+
 # [1.3.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.2.0...v1.3.0) (2026-06-10)
 
 
