@@ -73,7 +73,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "WeReadPDF — May the words be ever in your favor" },
+      // Tab title: short and utility-first so it survives tab truncation; the
+      // Hunger Games flavor lives in the og tags for link previews.
+      { title: "WeReadPDF — Read PDFs like a book" },
       {
         name: "description",
         content:

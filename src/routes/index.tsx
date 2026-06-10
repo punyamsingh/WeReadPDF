@@ -4,7 +4,7 @@ import { App } from "@/components/App";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "WeReadPDF — Read PDFs Like Ebooks" },
+      { title: "WeReadPDF — Read PDFs like a book" },
       {
         name: "description",
         content:

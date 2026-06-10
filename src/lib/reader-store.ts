@@ -19,9 +19,9 @@ export type ParagraphStyle = "indented" | "spaced";
 /**
  * How the book is presented:
  * - "paginated": Kindle-style page turns — text reflowed into viewport-sized
- *   screens you tap/swipe through.
+ *   screens you tap/swipe through. The default everywhere.
  * - "scroll": one continuous, virtualized column you scroll, like a long
- *   article. The natural default on touch devices.
+ *   article. Available as an opt-in from the reader settings.
  */
 export type ReadingMode = "paginated" | "scroll";
 
@@ -71,19 +71,10 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   paragraphStyle: "spaced",
   paragraphSpacing: 1,
   letterSpacing: 0,
-  // Page-turn by default. On a first run with no saved settings, loadSettings()
-  // upgrades this to "scroll" on touch/narrow devices, where a continuous swipe
-  // feels more natural than tapping through pages.
+  // Kindle-style page turns on every device — the book-like presentation is
+  // the product's signature. Continuous scroll stays one tap away in settings.
   readingMode: "paginated",
 };
-
-/** Continuous scroll is the friendlier default on phones; page-turn on desktop. */
-function defaultReadingMode(): ReadingMode {
-  if (typeof window === "undefined") return DEFAULT_SETTINGS.readingMode;
-  const coarse = window.matchMedia?.("(pointer: coarse)").matches;
-  const narrow = window.innerWidth < 768;
-  return coarse || narrow ? "scroll" : "paginated";
-}
 
 const SETTINGS_KEY = "wereadpdf.settings";
 const PROGRESS_KEY = "wereadpdf.progress";
@@ -95,12 +86,10 @@ export function loadSettings(): ReaderSettings {
   if (typeof localStorage === "undefined") return DEFAULT_SETTINGS;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    // First run: pick a presentation that fits the device.
-    if (!raw) return { ...DEFAULT_SETTINGS, readingMode: defaultReadingMode() };
-    const saved = JSON.parse(raw);
-    // Settings saved before reading modes existed get the device-fit default too.
-    const readingMode: ReadingMode = saved.readingMode ?? defaultReadingMode();
-    return { ...DEFAULT_SETTINGS, ...saved, readingMode };
+    if (!raw) return DEFAULT_SETTINGS;
+    // Saved settings win field-by-field; anything missing (including a
+    // readingMode saved before the setting existed) falls back to defaults.
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch {
     return DEFAULT_SETTINGS;
   }
