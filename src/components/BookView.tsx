@@ -12,6 +12,7 @@ import {
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, deriveTitles } from "@/lib/book-content";
 import type { PlacedRange } from "@/lib/annotations";
+import { usePinchZoom } from "@/lib/use-pinch-zoom";
 import { renderBlock } from "./highlight";
 
 /** Resolved highlight ranges: source page → paragraph index → ranges. */
@@ -69,6 +70,8 @@ interface Props {
   onAnnotationTap?: (id: string) => void;
   /** Sentence being read aloud — highlighted and kept in view. */
   tts?: TtsHighlight | null;
+  /** Pinch-to-resize text: the new body font size (px) a two-finger pinch lands on. */
+  onFontSize?: (size: number) => void;
 }
 
 // Breathing room inside each screen. The horizontal value is a baseline; the
@@ -350,6 +353,7 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     highlights,
     onAnnotationTap,
     tts,
+    onFontSize,
   },
   ref,
 ) {
@@ -666,14 +670,29 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
   const turn = useCallback((delta: number) => (delta > 0 ? next() : prev()), [next, prev]);
 
-  // Tap zones + swipe, without stealing text selection.
+  // Pinch-to-resize text (Kindle-style) — drives the font-size setting.
+  const pinch = usePinchZoom(settings.fontSize, (size) => onFontSize?.(size));
+
+  // Tap zones + swipe, without stealing text selection. A two-finger pinch
+  // cancels any in-flight single-finger gesture so it never also turns the page.
   const gesture = useRef<{ x: number; y: number; t: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
+    pinch.onPointerDown(e);
+    if (pinch.isPinching()) {
+      gesture.current = null;
+      return;
+    }
     gesture.current = { x: e.clientX, y: e.clientY, t: Date.now() };
   };
+  const onPointerMove = (e: React.PointerEvent) => {
+    pinch.onPointerMove(e);
+    if (pinch.isPinching()) gesture.current = null;
+  };
   const onPointerUp = (e: React.PointerEvent) => {
+    pinch.onPointerUp(e);
     const g = gesture.current;
     gesture.current = null;
+    if (pinch.isPinching()) return; // a pinch just ended — don't treat the lift as a tap
     if (!g) return;
     const sel = window.getSelection?.();
     if (sel && !sel.isCollapsed && sel.toString().length > 0) return; // user is selecting text
@@ -714,10 +733,17 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     <div
       ref={viewportRef}
       className="relative flex-1 overflow-hidden"
-      style={{ touchAction: "manipulation" }}
+      // `none` hands every touch to us: single-finger taps/swipes turn pages and
+      // two-finger pinches resize the text, with no browser scroll/zoom fighting
+      // for the gesture.
+      style={{ touchAction: "none" }}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => (gesture.current = null)}
+      onPointerCancel={(e) => {
+        pinch.onPointerUp(e);
+        gesture.current = null;
+      }}
     >
       <div
         ref={contentRef}

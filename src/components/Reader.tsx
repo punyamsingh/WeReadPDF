@@ -749,6 +749,7 @@ export function Reader({ doc, onExit }: Props) {
             highlights={highlightsByPage}
             onAnnotationTap={setEditingId}
             tts={ttsHighlight}
+            onFontSize={(size) => setSettings((s) => ({ ...s, fontSize: size }))}
           />
         ) : (
           <BookView
@@ -762,6 +763,7 @@ export function Reader({ doc, onExit }: Props) {
             highlights={highlightsByPage}
             onAnnotationTap={setEditingId}
             tts={ttsHighlight}
+            onFontSize={(size) => setSettings((s) => ({ ...s, fontSize: size }))}
           />
         )}
       </div>

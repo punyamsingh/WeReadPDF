@@ -11,6 +11,7 @@ import {
 } from "react";
 import { FONT_VARS, type CachedDoc, type ReaderSettings } from "@/lib/reader-store";
 import { type Block, buildBlocks, countWords, deriveTitles } from "@/lib/book-content";
+import { usePinchZoom } from "@/lib/use-pinch-zoom";
 import type {
   BookApi,
   HighlightsByPage,
@@ -36,6 +37,8 @@ interface Props {
   onAnnotationTap?: (id: string) => void;
   /** Sentence being read aloud — highlighted and kept in view. */
   tts?: TtsHighlight | null;
+  /** Pinch-to-resize text: the new body font size (px) a two-finger pinch lands on. */
+  onFontSize?: (size: number) => void;
 }
 
 // Horizontal breathing room (the "side margin" setting adds to it) and the
@@ -92,6 +95,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     highlights,
     onAnnotationTap,
     tts,
+    onFontSize,
   },
   ref,
 ) {
@@ -318,10 +322,18 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     }
   }, [tts, scrollToSource, reduceMotion]);
 
-  // Tap zones: edges page a screen, center toggles the chrome. A real scroll or
-  // a text selection is never mistaken for a tap.
+  // Pinch-to-resize text (Kindle-style) — drives the font-size setting.
+  const pinch = usePinchZoom(settings.fontSize, (size) => onFontSize?.(size));
+
+  // Tap zones: edges page a screen, center toggles the chrome. A real scroll, a
+  // text selection or a two-finger pinch is never mistaken for a tap.
   const gesture = useRef<{ x: number; y: number; t: number; top: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
+    pinch.onPointerDown(e);
+    if (pinch.isPinching()) {
+      gesture.current = null;
+      return;
+    }
     gesture.current = {
       x: e.clientX,
       y: e.clientY,
@@ -329,9 +341,15 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
       top: scrollRef.current?.scrollTop ?? 0,
     };
   };
+  const onPointerMove = (e: React.PointerEvent) => {
+    pinch.onPointerMove(e);
+    if (pinch.isPinching()) gesture.current = null;
+  };
   const onPointerUp = (e: React.PointerEvent) => {
+    pinch.onPointerUp(e);
     const g = gesture.current;
     gesture.current = null;
+    if (pinch.isPinching()) return; // a pinch just ended — don't treat the lift as a tap
     if (!g) return;
     const sel = window.getSelection?.();
     if (sel && !sel.isCollapsed && sel.toString().length > 0) return; // selecting text
@@ -361,10 +379,17 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
       ref={scrollRef}
       onScroll={onScroll}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => (gesture.current = null)}
+      onPointerCancel={(e) => {
+        pinch.onPointerUp(e);
+        gesture.current = null;
+      }}
       className="relative flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
       style={{
+        // `pan-y` keeps one-finger vertical scrolling native while disabling the
+        // browser's pinch-zoom, so a two-finger pinch reaches us to resize text.
+        touchAction: "pan-y",
         paddingTop: PAD_TOP,
         paddingBottom: PAD_BOTTOM,
         paddingLeft: padX,
