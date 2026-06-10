@@ -141,10 +141,16 @@ function RootComponent() {
   }, []);
 
   // Respect the device rotation lock by locking to portrait. The Screen
-  // Orientation API is unsupported in Safari; the try/catch is the correct
-  // handling pattern per the spec.
+  // Orientation API is partially implemented in some browsers: orientation
+  // exists but lock does not, causing a TypeError without the second ?. Safari
+  // doesn't implement lock at all; the outer try/catch swallows any synchronous
+  // throw so TanStack Start's error handler never sees it.
   useEffect(() => {
-    screen.orientation?.lock("portrait").catch(() => {});
+    try {
+      screen.orientation?.lock?.("portrait")?.catch(() => {});
+    } catch {
+      // lock unavailable or SecurityError — ignore
+    }
   }, []);
 
   return (
