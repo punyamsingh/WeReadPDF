@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.2.0...v1.3.0) (2026-06-10)
+
+
+### Features
+
+* ignite the home page with rising embers and shimmer ([e268fbd](https://github.com/punyamsingh/WeReadPDF/commit/e268fbdf10f0406a74ae288a383955c1051d9110))
+
 # [1.2.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.1.0...v1.2.0) (2026-06-10)
 
 
