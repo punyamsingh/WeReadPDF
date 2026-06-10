@@ -127,16 +127,19 @@ export function Library({
           <Mockingjay className="w-7 h-7 pin-glow" />
           <span className="font-serif text-xl font-semibold tracking-wide">WeReadPDF</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           {installer.available && (
             <button
               onClick={installer.install}
-              className="flex items-center gap-1.5 rounded-md border border-ember/40 px-3 py-1.5 text-xs uppercase tracking-[0.15em] text-ember hover:bg-ember/10 transition-colors"
+              aria-label="Install app"
+              title="Install app"
+              className="flex items-center gap-1.5 rounded-md border border-ember/40 p-2 sm:px-3 sm:py-1.5 text-xs uppercase tracking-[0.15em] text-ember hover:bg-ember/10 transition-colors"
             >
-              <Download className="w-3 h-3" /> Install app
+              <Download className="w-3 h-3" />
+              <span className="hidden sm:inline">Install app</span>
             </button>
           )}
-          <span className="flex items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+          <span className="hidden items-center gap-1.5 text-xs uppercase tracking-[0.2em] text-muted-foreground sm:flex">
             <Lock className="w-3 h-3" /> District-local
           </span>
         </div>
