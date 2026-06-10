@@ -1,3 +1,10 @@
+## [1.5.2](https://github.com/punyamsingh/WeReadPDF/compare/v1.5.1...v1.5.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* guard screen.orientation.lock against partial API implementations ([#36](https://github.com/punyamsingh/WeReadPDF/issues/36)) ([60cc194](https://github.com/punyamsingh/WeReadPDF/commit/60cc194dd5123e201f0eca6a752c755b92ec9be0))
+
 ## [1.5.1](https://github.com/punyamsingh/WeReadPDF/compare/v1.5.0...v1.5.1) (2026-06-10)
 
 
