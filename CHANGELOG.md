@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/punyamsingh/WeReadPDF/compare/v1.5.0...v1.5.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* respect device rotation lock on mobile ([#35](https://github.com/punyamsingh/WeReadPDF/issues/35)) ([ad58b3c](https://github.com/punyamsingh/WeReadPDF/commit/ad58b3c99c047a89cec19791d3b948f01a4dfe51))
+
 # [1.5.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.4.0...v1.5.0) (2026-06-10)
 
 
