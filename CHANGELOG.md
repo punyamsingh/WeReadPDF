@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.3...v1.4.0) (2026-06-10)
+
+
+### Features
+
+* add Kindle-style pinch-to-resize text gesture ([697ea26](https://github.com/punyamsingh/WeReadPDF/commit/697ea266f24e620490e0766fb7d30b149ba758ff))
+
 ## [1.3.3](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.2...v1.3.3) (2026-06-10)
 
 
