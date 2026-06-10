@@ -451,6 +451,43 @@ export interface CascadeInput {
 }
 
 /**
+ * Merge the unstructured fallbacks — typography and the keyword/chapter
+ * detector — into one page-ordered, de-duplicated list. These are complementary
+ * rather than competing: a novel contributes its "Chapter N" / large-title
+ * headings, a paper its numbered sections, and either genre keeps standing if
+ * only one detector fires. Keyword chapters carry their genre confidence
+ * forward, so neither source silently shadows the other.
+ */
+function mergeFallbacks(
+  typography: HeadingCandidate[],
+  chapters: Array<{ title: string; pageNumber: number }>,
+): StructureNode[] {
+  const typo = cleanCandidates(refineTypography(typography)).map((c) =>
+    toNode(c, "typography", c.bold ? 0.7 : 0.55),
+  );
+  const chap = chapters.map((c) =>
+    toNode({ title: c.title, page: c.pageNumber, level: 1 }, "fallback", 0.5),
+  );
+
+  // Stable sort by page keeps document order; typography lands before a
+  // same-page chapter so its richer (bold/level) reading wins the de-dupe.
+  const merged = [...typo, ...chap]
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => a.n.page - b.n.page || a.i - b.i)
+    .map((x) => x.n);
+
+  const seen = new Set<string>();
+  const out: StructureNode[] = [];
+  for (const n of merged) {
+    const key = norm(n.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  return out;
+}
+
+/**
  * Merge the detectors into one ordered StructureNode list, trusting the
  * strongest available source. Returns an empty list only when nothing fired —
  * the caller then drops in evenly spaced page markers so the contents panel is
@@ -463,15 +500,8 @@ export function buildStructure(input: CascadeInput): StructureNode[] {
   if (input.outline.length >= 2) {
     return outlineToCandidates(input.outline).map((c) => toNode(c, "outline", 0.9));
   }
-  const typo = cleanCandidates(refineTypography(input.typography));
-  if (typo.length >= 2) {
-    return typo.map((c) => toNode(c, "typography", c.bold ? 0.7 : 0.55));
-  }
-  if (input.chapters.length >= 2) {
-    return input.chapters.map((c) =>
-      toNode({ title: c.title, page: c.pageNumber, level: 1 }, "fallback", 0.5),
-    );
-  }
+  const merged = mergeFallbacks(input.typography, input.chapters);
+  if (merged.length >= 2) return merged;
   return [];
 }
 
