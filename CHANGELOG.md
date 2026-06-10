@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.1...v1.3.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* declutter mobile nav by compacting the install button ([4304671](https://github.com/punyamsingh/WeReadPDF/commit/43046719048dd8a59398e119e4fc6f07dda5fd35))
+
 ## [1.3.1](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.0...v1.3.1) (2026-06-10)
 
 
