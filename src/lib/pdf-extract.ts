@@ -446,17 +446,24 @@ async function ocrTextlessPages(
     let done = 0;
     onProgress?.(0, targets.length, "ocr");
     for (const p of targets) {
-      const canvas = await renderPageToCanvas(pdf, p.pageNumber);
-      if (canvas) {
-        const { data } = await worker.recognize(canvas);
-        const text = cleanOcrText(data.text ?? "");
-        if (alnumCount(text) >= OCR_TEXT_THRESHOLD) p.text = text;
-        canvas.width = canvas.height = 0; // release the bitmap eagerly
+      // Best-effort per page: one corrupt page must not abort OCR for the rest.
+      let canvas: HTMLCanvasElement | null = null;
+      try {
+        canvas = await renderPageToCanvas(pdf, p.pageNumber);
+        if (canvas) {
+          const { data } = await worker.recognize(canvas);
+          const text = cleanOcrText(data.text ?? "");
+          if (alnumCount(text) >= OCR_TEXT_THRESHOLD) p.text = text;
+        }
+      } catch {
+        /* leave this page textless and move on */
+      } finally {
+        if (canvas) canvas.width = canvas.height = 0; // release the bitmap eagerly
+        onProgress?.(++done, targets.length, "ocr");
       }
-      onProgress?.(++done, targets.length, "ocr");
     }
   } catch {
-    /* best-effort — the no-text check after extraction reports total failure */
+    /* worker/setup failure — the no-text check after extraction reports it */
   } finally {
     await worker?.terminate().catch(() => {});
   }

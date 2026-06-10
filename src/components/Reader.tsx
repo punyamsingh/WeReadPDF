@@ -282,34 +282,66 @@ export function Reader({ doc, onExit }: Props) {
   const bookWrapRef = useRef<HTMLDivElement>(null);
   const blockByPage = useMemo(() => new Map(blocks.map((b) => [b.srcPage, b])), [blocks]);
 
+  // Persistence failures must not be invisible: the optimistic UI update is
+  // reconciled back to what IndexedDB actually holds, and a transient notice
+  // tells the reader the mark won't survive a reload.
+  const [annError, setAnnError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!annError) return;
+    const id = setTimeout(() => setAnnError(null), 5000);
+    return () => clearTimeout(id);
+  }, [annError]);
+
+  const reloadAnnotations = useCallback(() => {
+    listAnnotations(doc.key)
+      .then(setAnnotations)
+      .catch(() => {
+        /* storage unavailable — keep the optimistic state on screen */
+      });
+  }, [doc.key]);
+
   useEffect(() => {
     let alive = true;
     listAnnotations(doc.key)
       .then((a) => alive && setAnnotations(a))
-      .catch(() => {});
+      .catch(() => alive && setAnnError("Couldn't load the marks saved for this book."));
     return () => {
       alive = false;
     };
   }, [doc.key]);
 
-  const upsertAnnotation = useCallback((a: Annotation) => {
-    setAnnotations((prev) => {
-      const next = prev.some((x) => x.id === a.id)
-        ? prev.map((x) => (x.id === a.id ? a : x))
-        : [...prev, a];
-      return next.sort(
-        (x, y) =>
-          x.srcPage - y.srcPage || (x.ordinal ?? 0) - (y.ordinal ?? 0) || x.createdAt - y.createdAt,
-      );
-    });
-    saveAnnotation(a).catch(() => {});
-  }, []);
+  const upsertAnnotation = useCallback(
+    (a: Annotation) => {
+      setAnnotations((prev) => {
+        const next = prev.some((x) => x.id === a.id)
+          ? prev.map((x) => (x.id === a.id ? a : x))
+          : [...prev, a];
+        return next.sort(
+          (x, y) =>
+            x.srcPage - y.srcPage ||
+            (x.ordinal ?? 0) - (y.ordinal ?? 0) ||
+            x.createdAt - y.createdAt,
+        );
+      });
+      saveAnnotation(a).catch(() => {
+        setAnnError("Couldn't save that mark — it won't survive a reload.");
+        reloadAnnotations();
+      });
+    },
+    [reloadAnnotations],
+  );
 
-  const removeAnnotation = useCallback((id: string) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
-    setEditingId((e) => (e === id ? null : e));
-    deleteAnnotation(id).catch(() => {});
-  }, []);
+  const removeAnnotation = useCallback(
+    (id: string) => {
+      setAnnotations((prev) => prev.filter((a) => a.id !== id));
+      setEditingId((e) => (e === id ? null : e));
+      deleteAnnotation(id).catch(() => {
+        setAnnError("Couldn't delete that mark.");
+        reloadAnnotations();
+      });
+    },
+    [reloadAnnotations],
+  );
 
   // Resolve highlight text-anchors into concrete paragraph ranges per page.
   const highlightsByPage = useMemo<HighlightsByPage>(() => {
@@ -375,7 +407,15 @@ export function Reader({ doc, onExit }: Props) {
       }
 
       const paraText = pEl.textContent ?? "";
-      const paraIdx = block.paras.indexOf(paraText);
+      // The rendered <p> carries its own index — stable even when the same
+      // paragraph text repeats on a page (a text lookup would always hit the
+      // first copy and mis-anchor the highlight). Text match stays as a
+      // sanity check / fallback only.
+      const fromAttr = Number(pEl.dataset.paraIdx);
+      const paraIdx =
+        Number.isInteger(fromAttr) && block.paras[fromAttr] === paraText
+          ? fromAttr
+          : block.paras.indexOf(paraText);
       if (paraIdx === -1) {
         setPendingSel(null);
         return;
@@ -883,6 +923,18 @@ export function Reader({ doc, onExit }: Props) {
             >
               <X className="w-3.5 h-3.5" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Transient annotation-storage notice */}
+      {annError && (
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-40 flex justify-center px-4">
+          <div
+            role="alert"
+            className="pointer-events-auto rounded-md border border-destructive/40 bg-card/95 px-4 py-2 text-sm text-destructive shadow-lg backdrop-blur"
+          >
+            {annError}
           </div>
         </div>
       )}

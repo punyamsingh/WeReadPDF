@@ -36,10 +36,12 @@ export function useFocusTrap<T extends HTMLElement = HTMLDivElement>() {
       const first = els[0];
       const last = els[els.length - 1];
       const active = document.activeElement;
+      // The container itself (tabIndex={-1}) holds focus right after opening —
+      // treat it as both ends so Tab in either direction stays inside.
       if (e.shiftKey && (active === first || active === node)) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && active === last) {
+      } else if (!e.shiftKey && (active === last || active === node)) {
         e.preventDefault();
         first.focus();
       }

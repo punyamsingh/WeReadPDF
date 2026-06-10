@@ -440,6 +440,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
               {paraNodes.map((para, i) => (
                 <Fragment key={i}>
                   <p
+                    data-para-idx={i}
                     style={{
                       marginTop: 0,
                       marginBottom: indented ? "0.2em" : `${settings.paragraphSpacing}em`,
