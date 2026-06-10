@@ -1,3 +1,16 @@
+# [1.5.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.4.0...v1.5.0) (2026-06-10)
+
+
+### Bug Fixes
+
+* clamp TOC indent and document structure helpers ([a404e7e](https://github.com/punyamsingh/WeReadPDF/commit/a404e7eb7f156ffdda5c7e704e860b9cce232df6))
+* let typography and keyword chapter detectors cooperate ([02d9faf](https://github.com/punyamsingh/WeReadPDF/commit/02d9fafcaf8765467ca129267e39e21b7d11c701))
+
+
+### Features
+
+* detect document structure with a multi-source cascade ([e04e190](https://github.com/punyamsingh/WeReadPDF/commit/e04e19020a0b0243f8c156e421a3a88d1e41f2aa))
+
 # [1.4.0](https://github.com/punyamsingh/WeReadPDF/compare/v1.3.3...v1.4.0) (2026-06-10)
 
 
