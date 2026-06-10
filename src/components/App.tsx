@@ -60,6 +60,7 @@ export function App() {
         author: extracted.author,
         pages: extracted.pages,
         outline: extracted.outline,
+        structure: extracted.structure,
         wordCount: extracted.wordCount,
         savedAt: Date.now(),
       };
