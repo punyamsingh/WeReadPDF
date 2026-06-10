@@ -140,6 +140,13 @@ function RootComponent() {
     }
   }, []);
 
+  // Respect the device rotation lock by locking to portrait. The Screen
+  // Orientation API is unsupported in Safari; the try/catch is the correct
+  // handling pattern per the spec.
+  useEffect(() => {
+    screen.orientation?.lock("portrait").catch(() => {});
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
