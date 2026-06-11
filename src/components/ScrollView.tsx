@@ -121,6 +121,10 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
   // The source page currently at the top of the viewport — preserved across
   // reflows when a typography setting changes.
   const anchorRef = useRef(initialSourcePage);
+  // The exact paragraph sitting at the reading line and how far it has scrolled
+  // past it, so a reflow (zoom / font change) restores this precise spot rather
+  // than snapping to the top of the source page (the "beginning of the section").
+  const fineAnchorRef = useRef<{ srcPage: number; paraIdx: number; offset: number } | null>(null);
   const globalFirstSrcPage = blocks[0]?.srcPage ?? 0;
 
   const [reduceMotion, setReduceMotion] = useState(false);
@@ -143,12 +147,12 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     };
   }, []);
 
-  // Resolve the source page sitting at the top of the viewport via binary search
-  // over the anchors' live positions (monotonic in document order).
-  const topSourcePage = useCallback((): number => {
+  // Resolve the source section sitting at the top of the viewport via binary
+  // search over the anchors' live positions (monotonic in document order).
+  const topSection = useCallback((): { srcPage: number; el: HTMLElement } | null => {
     const cont = scrollRef.current;
     const els = sectionsRef.current;
-    if (!cont || !els.length) return anchorRef.current;
+    if (!cont || !els.length) return null;
     const cutoff = cont.getBoundingClientRect().top + PAD_TOP + 1;
     let lo = 0;
     let hi = els.length - 1;
@@ -162,8 +166,31 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
         hi = mid - 1;
       }
     }
-    return els[ans].srcPage;
+    return els[ans];
   }, []);
+
+  // Record the paragraph crossing the reading line (and how far it sits past it)
+  // so a reflow can land back on exactly this spot.
+  const captureFineAnchor = useCallback(
+    (sec: { srcPage: number; el: HTMLElement }, cont: HTMLDivElement) => {
+      const cutoff = cont.getBoundingClientRect().top + PAD_TOP;
+      const paras = sec.el.querySelectorAll<HTMLElement>("[data-para-idx]");
+      for (const p of paras) {
+        const r = p.getBoundingClientRect();
+        if (r.bottom >= cutoff) {
+          fineAnchorRef.current = {
+            srcPage: sec.srcPage,
+            paraIdx: Number(p.dataset.paraIdx),
+            offset: r.top - cutoff,
+          };
+          return;
+        }
+      }
+      // Nothing crosses the line (e.g. a chapter heading) — fall back to the page.
+      fineAnchorRef.current = null;
+    },
+    [],
+  );
 
   // Publish the current reading position from the live scroll offset.
   const report = useCallback(() => {
@@ -173,8 +200,10 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     const denom = scrollHeight - clientHeight;
     const scrolledFrac = denom > 0 ? Math.min(1, Math.max(0, scrollTop / denom)) : 0;
 
-    const sourcePage = topSourcePage();
+    const sec = topSection();
+    const sourcePage = sec?.srcPage ?? anchorRef.current;
     anchorRef.current = sourcePage;
+    if (sec) captureFineAnchor(sec, cont);
 
     // Word-based fraction (stable across typography, matching the paginated
     // view), snapped to 100% once the scroll bottoms out so the bar completes.
@@ -187,7 +216,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     const page = Math.min(total, Math.floor(scrollTop / Math.max(1, clientHeight)) + 1);
 
     onChange({ sourcePage, fraction, page, total });
-  }, [blocks, wordsBefore, totalWords, topSourcePage, onChange]);
+  }, [blocks, wordsBefore, totalWords, topSection, captureFineAnchor, onChange]);
 
   // Scroll the given source page to the top of the reading area.
   const scrollToSource = useCallback((srcPage: number, smooth: boolean) => {
@@ -212,6 +241,32 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
     cont.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
   }, []);
 
+  // Restore the reading position after a reflow: prefer the exact paragraph we
+  // were on (so zoom/font changes stay put), falling back to the source page.
+  const restoreAnchor = useCallback(
+    (smooth: boolean) => {
+      const cont = scrollRef.current;
+      if (!cont) return;
+      const fine = fineAnchorRef.current;
+      if (fine) {
+        const sec = sectionsRef.current.find((s) => s.srcPage === fine.srcPage);
+        const p = sec?.el.querySelector<HTMLElement>(`[data-para-idx="${fine.paraIdx}"]`);
+        if (p) {
+          const top =
+            p.getBoundingClientRect().top -
+            cont.getBoundingClientRect().top +
+            cont.scrollTop -
+            PAD_TOP -
+            fine.offset;
+          cont.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+          return;
+        }
+      }
+      scrollToSource(anchorRef.current, smooth);
+    },
+    [scrollToSource],
+  );
+
   // Build the anchor list and restore the reading position when the book opens.
   useLayoutEffect(() => {
     const cont = scrollRef.current;
@@ -223,6 +278,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
       }),
     );
     anchorRef.current = initialSourcePage;
+    fineAnchorRef.current = null;
     scrollToSource(initialSourcePage, false);
     report();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,7 +292,7 @@ export const ScrollView = forwardRef<BookApi, Props>(function ScrollView(
       firstReflow.current = false;
       return; // the open-book effect already positioned us
     }
-    scrollToSource(anchorRef.current, false);
+    restoreAnchor(false);
     report();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [

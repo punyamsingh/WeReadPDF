@@ -413,6 +413,12 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
   // The source page to keep the reader anchored to across reflows.
   const anchorRef = useRef(initialSourcePage);
+  // The paragraph at the top of the current screen. A reflow (zoom / font
+  // change) lands back on whichever screen this exact paragraph falls on, so a
+  // source page spanning several screens keeps its spot instead of snapping to
+  // the start of the section. The node survives a reflow (only its layout
+  // changes), so we hold the element itself and read its new column afterwards.
+  const fineAnchorRef = useRef<HTMLElement | null>(null);
   // How to land after the next chunk layout (chunk switches set this; a plain
   // reflow defaults to preserving the anchor).
   const pendingEntryRef = useRef<Entry | null>(null);
@@ -541,7 +547,17 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
     let landing: number;
     if (entry === "start") landing = 0;
     else if (entry === "end") landing = local - 1;
-    else landing = screenForSource(anchorRef.current, local);
+    else if (entry === "anchor") landing = screenForSource(anchorRef.current, local);
+    else {
+      // A plain reflow (zoom / font / measure / resize): keep the exact
+      // paragraph we were reading, falling back to the source page if its node
+      // is gone (e.g. the chunk changed).
+      const el = fineAnchorRef.current;
+      landing =
+        el && content.contains(el)
+          ? Math.max(0, Math.min(Math.floor(el.offsetLeft / W), local - 1))
+          : screenForSource(anchorRef.current, local);
+    }
 
     jumpRef.current = true; // snap into the resolved spot, don't slide
     setLocalPage(landing);
@@ -584,6 +600,24 @@ export const BookView = forwardRef<BookApi, Props>(function BookView(
 
     const sourcePage = sourceForScreen(localPage);
     anchorRef.current = sourcePage;
+
+    // Remember the topmost paragraph on the current screen, so a later reflow
+    // can restore this exact spot rather than the start of the source page.
+    const content = contentRef.current;
+    const W = viewportRef.current?.clientWidth ?? 0;
+    if (content && W > 0) {
+      let top: HTMLElement | null = null;
+      let topY = Infinity;
+      for (const p of content.querySelectorAll<HTMLElement>("[data-para-idx]")) {
+        if (Math.floor(p.offsetLeft / W) !== localPage) continue;
+        if (p.offsetTop < topY) {
+          topY = p.offsetTop;
+          top = p;
+        }
+      }
+      if (top) fineAnchorRef.current = top;
+    }
+
     onChange({ sourcePage, fraction, page, total });
   }, [currentChunk, localPage, localTotal, chunks, totalWords, sourceForScreen, onChange]);
 
