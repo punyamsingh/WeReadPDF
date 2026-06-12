@@ -1,3 +1,10 @@
+## [1.5.3](https://github.com/punyamsingh/WeReadPDF/compare/v1.5.2...v1.5.3) (2026-06-12)
+
+
+### Bug Fixes
+
+* keep reading position when zooming instead of jumping to section start ([eefde29](https://github.com/punyamsingh/WeReadPDF/commit/eefde29ccae242cb10130385e423140bf800fa9f))
+
 ## [1.5.2](https://github.com/punyamsingh/WeReadPDF/compare/v1.5.1...v1.5.2) (2026-06-10)
 
 
